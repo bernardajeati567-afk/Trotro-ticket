@@ -1,17 +1,37 @@
-name: Build Trotro v11 Fixed
-on: [push, workflow_dispatch]
+name: Build Trotro V12 APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
-          flutter-version: '3.22.0'
+          distribution: 'zulu'
+          java-version: '17'
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
           channel: 'stable'
-      - run: flutter pub get
-      - run: flutter build apk --release
-      - uses: actions/upload-artifact@v4
+          cache: true
+      
+      - name: Install dependencies
+        run: flutter pub get
+      
+      - name: Build APK
+        run: flutter build apk --release
+      
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: trotro_v11_final
+          name: trotro-v12-apk
           path: build/app/outputs/flutter-apk/app-release.apk
