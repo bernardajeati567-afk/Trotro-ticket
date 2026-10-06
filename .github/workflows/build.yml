@@ -13,5 +13,5 @@ jobs:
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
-          name: trotro-v11-final
+          name: trotro_v11_final
           path: build/app/outputs/flutter-apk/app-release.apk
