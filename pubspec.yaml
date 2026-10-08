@@ -1,19 +1,26 @@
-name: real_me_trotro
-description: REAL ME TROTRO - GOV EDITION v11
+name: trotro_ticket
+description: REAL ME TROTRO - QR ticket app for Trotro busses with fraud lock - Government Approved
 publish_to: 'none'
-version: 11.0.0+11
+version: 1.0.0+1
+
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: '>=3.0.0 <4.0.0'
+
 dependencies:
   flutter:
     sdk: flutter
-  sqflite: ^2.3.2
-  path: ^1.8.3
-  crypto: ^3.0.3
-  pdf: ^3.10.7
-  printing: ^5.11.1
-  intl: ^0.19.0
+  cupertino_icons: ^1.0.6
   qr_flutter: ^4.1.0
+  mobile_scanner: ^3.5.7
   shared_preferences: ^2.2.2
+  crypto: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
 flutter:
   uses-material-design: true
+  assets:
+    - assets/icon.jpg
