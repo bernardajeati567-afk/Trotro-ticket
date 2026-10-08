@@ -1,176 +1,39 @@
-import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:crypto/crypto.dart';
-
+import 'dart:convert';import 'dart:math';import 'package:flutter/material.dart';import 'package:shared_preferences/shared_preferences.dart';import 'package:qr_flutter/qr_flutter.dart';import 'package:mobile_scanner/mobile_scanner.dart';import 'package:crypto/crypto.dart';
 void main()=>runApp(const TrotroApp());
-class TrotroApp extends StatelessWidget{
-const TrotroApp({super.key});
-@override Widget build(BuildContext c)=>MaterialApp(debugShowCheckedModeBanner:false,title:'REAL ME TROTRO',theme:ThemeData(primaryColor:const Color(0xFFCE1126)),home:const Home());
-}
-
-// MODELS
-Map<String,Map<String,double>> defaultFares={
-"cape coast":{"swedru":45,"accra":35,"kumasi":25},
-"swedru":{"cape coast":45,"accra":20,"kumasi":30},
-"accra":{"cape coast":35,"swedru":20,"kumasi":45,"tamale":80,"kasoa":10},
-"kumasi":{"cape coast":25,"swedru":30,"accra":45,"tamale":65},
-"tamale":{"kumasi":65,"accra":80}
-};
-
-class Home extends StatefulWidget{const Home({super.key});@override State<Home>createState()=>_HomeS();}
-class _HomeS extends State<Home>{
-String? curUser;String? curRole;String? curStation;
-Map<String,Map<String,double>> fares={};
-Map<String,dynamic> users={};
-List usedSeats=[]; List sales=[];
-
-@override void initState(){super.initState();loadAll();}
-Future loadAll()async{
-final p=await SharedPreferences.getInstance();
-fares=defaultFares;
-if(p.getString('fares')!=null){fares=Map<String,Map<String,double>>.from((jsonDecode(p.getString('fares')!) as Map).map((k,v)=>MapEntry(k,Map<String,double>.from((v as Map).map((k2,v2)=>MapEntry(k2,(v2 as num).toDouble()))))));}
-users=p.getString('users')!=null?jsonDecode(p.getString('users')!):{"admin":{"pw":sha256.convert(utf8.encode("Ad1My")).toString(),"station":"Head Office","role":"admin","name":"System Admin"}};
-usedSeats=p.getStringList('seats')??[]; sales=p.getString('sales')!=null?jsonDecode(p.getString('sales')!):[];
-setState((){});
-}
-Future saveAll()async{
-final p=await SharedPreferences.getInstance();
-p.setString('fares',jsonEncode(fares));p.setString('users',jsonEncode(users));p.setStringList('seats',usedSeats.cast<String>());p.setString('sales',jsonEncode(sales));
-}
-String hash(String s)=>sha256.convert(utf8.encode(s)).toString();
-
-// UI
-@override Widget build(BuildContext context){
-return Scaffold(appBar:AppBar(backgroundColor:const Color(0xFFCE1126),title:const Text('REAL ME TROTRO - GOV',style:TextStyle(color:Colors.white,fontWeight:FontWeight.bold)),centerTitle:true),
-body:ListView(padding:const EdgeInsets.all(16),children:[
-Container(padding:const EdgeInsets.all(12),color:Colors.black,child:const Text('Safe. Fast. Reliable. | Government Approved',style:TextStyle(color:Color(0xFFFCD116)),textAlign:TextAlign.center)),
-const SizedBox(height:20),
-if(curUser==null)...[
-btn('1. Passenger - CHECK FARE ONLY',Colors.green,()=>openPassenger()),
-btn('2. Station Master Login',Colors.blue,()=>openLogin()),
-btn('3. Create/Delete Account (Admin)',Colors.orange,()=>openAdminCreate()),
-btn('4. Verify Ticket QR',Colors.purple,()=>openVerify()),
-] else...[
-Text('Welcome $curUser | $curStation | $curRole',style:const TextStyle(fontWeight:FontWeight.bold)),const SizedBox(height:10),
-if(curRole=='station_master')...[
-btn('>>> SELL TICKET <<<',const Color(0xFFCE1126),()=>openSell()),
-btn('View Routes',Colors.grey,()=>openRoutes()),
-btn('Daily Sales Report',Colors.teal,()=>openReport()),
-btn('Seat Map',Colors.brown,()=>openSeatMap()),
-btn('Reset Seats',Colors.red,()=>resetSeats()),
-],
-if(curRole=='admin')...[
-btn('Create Station Account',Colors.orange,()=>openAdminCreate()),
-btn('View Routes',Colors.grey,()=>openRoutes()),
-btn('Daily Sales Report',Colors.teal,()=>openReport()),
-],
-ElevatedButton(onPressed:(){setState((){curUser=null;curRole=null;curStation=null;});},child:const Text('Logout'))
+class TrotroApp extends StatelessWidget{const TrotroApp({super.key});@override Widget build(BuildContext c){return MaterialApp(debugShowCheckedModeBanner:false,home:const Home());}}
+class Home extends StatefulWidget{const Home({super.key});@override State<Home> createState()=>_HomeState();}
+class _HomeState extends State<Home>{
+Map<String,Map<String,double>> routes={"cape coast":{"swedru":45,"accra":35,"kumasi":25},"swedru":{"cape coast":45,"accra":20,"kumasi":30},"accra":{"cape coast":35,"swedru":20,"kumasi":45},"kumasi":{"cape coast":25,"swedru":30,"accra":45,"tamale":65},"tamale":{"kumasi":65}};
+Map<String,Map<String,String>> users={"admin":{"password":"Ad1My","station":"Head Office","role":"admin","full_name":"System Admin"}};
+List<String> used=[];List<Map<String,dynamic>> sales=[];String curU="Guest",curR="passenger",curS="Head Office";
+@override void initState(){super.initState();_load();}
+Future<void> _load()async{final p=await SharedPreferences.getInstance();setState((){
+routes=Map<String,Map<String,double>>.from(jsonDecode(p.getString('f')??jsonEncode(routes)).map((k,v)=>MapEntry(k as String,Map<String,double>.from((v as Map).map((kk,vv)=>MapEntry(kk as String,(vv as num).toDouble())))));
+users=Map<String,Map<String,String>>.from(jsonDecode(p.getString('u')??jsonEncode(users)).map((k,v)=>MapEntry(k as String,Map<String,String>.from(v))));
+used=List<String>.from(jsonDecode(p.getString('s')??"[]"));sales=List<Map<String,dynamic>>.from(jsonDecode(p.getString('sa')??"[]"));
+curU=p.getString('cu')??"Guest";curR=p.getString('cr')??"passenger";curS=p.getString('cs')??"Head Office";});}
+Future<void> _save()async{final p=await SharedPreferences.getInstance();await p.setString('f',jsonEncode(routes));await p.setString('u',jsonEncode(users));await p.setString('s',jsonEncode(used));await p.setString('sa',jsonEncode(sales));await p.setString('cu',curU);await p.setString('cr',curR);await p.setString('cs',curS);}
+String suggest(String i){var u=i.toLowerCase().trim();if(routes.containsKey(u))return u;for(var k in routes.keys){if(k.contains(u)||u.contains(k.replaceAll(" ","")))return k;}return u;}
+List<String> avail(){return [for(int i=1;i<=30;i++) "A${i.toString().padLeft(2,'0')}"].where((e)=>!used.contains(e)).toList();}
+void sell(String name,String from,String to,double fare,String seat){final n=DateTime.now();final tid="T${Random().nextInt(90000)+9999}";final d="${n.year}-${n.month.toString().padLeft(2,'0')}-${n.day.toString().padLeft(2,'0')}";final t="${n.hour}:${n.minute}:${n.second}";final sale={"ticket_id":tid,"date":d,"time":t,"name":name,"from":from,"to":to,"fare":fare,"seat":seat,"sold_by":curU};setState((){sales.insert(0,sale);used.add(seat);});_save();final qr="REALME|$tid|$seat|${from.toUpperCase()}-${to.toUpperCase()}|$fare|$d";showDialog(context:context,builder:(_)=>AlertDialog(title:Text("SOLD $tid"),content:Column(mainAxisSize:MainAxisSize.min,children:[QrImageView(data:qr,size:150),Text("Name:$name\n$from->$to\nSeat:$seat\nGHS $fare")]),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text("OK"))]));}
+@override Widget build(BuildContext c){
+final av=avail();
+return Scaffold(appBar:AppBar(backgroundColor:Colors.black,title:Text('TROTRO GOV - $curU ($curR) @ $curS',style:const TextStyle(color:Colors.white,fontSize:12))),
+body:ListView(padding:const EdgeInsets.all(10),children:[
+Container(color:Colors.black,padding:const EdgeInsets.all(10),child:Text('Safe. Fast. Reliable. | Gov Approved | DB trotro.db | $curU',style:const TextStyle(color:Colors.green,fontSize:10))),
+ListTile(title:const Text("1. Passenger CHECK FARE"),onTap:(){String f="",t="";showDialog(context:context,builder:(_)=>AlertDialog(title:const Text("Check Fare"),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(decoration:const InputDecoration(labelText:"From"),onChanged:(v)=>f=v),TextField(decoration:const InputDecoration(labelText:"To"),onChanged:(v)=>t=v)]),actions:[TextButton(onPressed:(){final fs=suggest(f);final ts=suggest(t);if(routes[fs]?[ts]!=null){Navigator.pop(context);ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text("${fs.toUpperCase()}->${ts.toUpperCase()} = GHS ${routes[fs]![ts]}")));}},child:const Text("CHECK"))]));}),
+ListTile(title:const Text("2. Station Master Login (admin/Ad1My)"),onTap:(){String u="",p="";showDialog(context:context,builder:(_)=>AlertDialog(title:const Text("Login"),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(onChanged:(v)=>u=v.toLowerCase().trim(),decoration:const InputDecoration(labelText:"Username")),TextField(onChanged:(v)=>p=v,decoration:const InputDecoration(labelText:"Password"),obscureText:true)]),actions:[TextButton(onPressed:(){if(users[u]?['password']==p){setState((){curU=u;curR=users[u]!['role']!;curS=users[u]!['station']!;});_save();Navigator.pop(context);} },child:const Text("LOGIN"))]));}),
+ListTile(tileColor:Colors.orange[100],title:const Text("3. Create/Delete Account (Admin)"),onTap:(){if(curR!="admin"){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text("Admin only!")));return;}String nu="",np="",fn="",st="accra";showDialog(context:context,builder:(_)=>StatefulBuilder(builder:(ctx,setD)=>AlertDialog(title:const Text("Create Account"),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(decoration:const InputDecoration(labelText:"Username"),onChanged:(v)=>nu=v.toLowerCase()),TextField(decoration:const InputDecoration(labelText:"Full Name"),onChanged:(v)=>fn=v),TextField(decoration:const InputDecoration(labelText:"Password"),onChanged:(v)=>np=v),DropdownButton<String>(value:st,items:routes.keys.map((e)=>DropdownMenuItem(value:e,child:Text(e))).toList(),onChanged:(v)=>setD(()=>st=v!)),Text("Users: ${users.keys.join(', ')}",style:const TextStyle(fontSize:10))]),actions:[TextButton(onPressed:(){if(nu.isEmpty||users.containsKey(nu))return;setState(()=>users[nu]={"password":np,"station":st,"role":"station_master","full_name":fn});_save();Navigator.pop(context);},child:const Text("CREATE")),TextButton(onPressed:(){String du="";showDialog(context:context,builder:(_)=>AlertDialog(title:const Text("Delete"),content:TextField(onChanged:(v)=>du=v.toLowerCase(),decoration:const InputDecoration(labelText:"Username")),actions:[TextButton(onPressed:(){if(du!="admin"&&users.containsKey(du)){setState(()=>users.remove(du));_save();Navigator.pop(context);Navigator.pop(context);} },child:const Text("DELETE"))]));},child:const Text("DELETE",style:TextStyle(color:Colors.red))) ])));}),
+ListTile(title:const Text("4. Verify Ticket"),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>VerifyPage(sales:sales)))),
+if(curR!="passenger")...[
+const Divider(),const Text("STATION MASTER MENU",style:TextStyle(fontWeight:FontWeight.bold)),
+ListTile(tileColor:Colors.green[100],title:const Text(">>> SELL TICKET <<<"),subtitle:Text("Seats left ${av.length}/30: ${av.take(3).join(',')}"),onTap:(){String name="",from=curS=="Head Office"?"accra":curS,to="",seat=av.isNotEmpty?av[0]:"A01";showDialog(context:context,builder:(_)=>StatefulBuilder(builder:(ctx,setD)=>AlertDialog(title:const Text("Sell Ticket"),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(decoration:const InputDecoration(labelText:"Passenger Name"),onChanged:(v)=>name=v),TextField(decoration:InputDecoration(labelText:"From [$from]"),onChanged:(v)=>from=v.isEmpty?from:v),TextField(decoration:const InputDecoration(labelText:"To"),onChanged:(v)=>to=v),DropdownButton<String>(value:seat,items:av.map((e)=>DropdownMenuItem(value:e,child:Text(e))).toList(),onChanged:(v)=>setD(()=>seat=v!))]),actions:[TextButton(onPressed:(){final fs=suggest(from);final ts=suggest(to);if(routes[fs]?[ts]==null)return;Navigator.pop(context);sell(name,fs,ts,routes[fs]![ts]!,seat);},child:const Text("SELL"))])));}),
+ListTile(title:const Text("View Routes / Update Fare"),onTap:(){showDialog(context:context,builder:(_)=>AlertDialog(title:const Text("Routes"),content:SizedBox(height:300,width:300,child:ListView(children:[for(var fs in routes.keys) for(var e in routes[fs]!.entries) Text("$fs -> ${e.key}: ${e.value}")])),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text("OK"))]));}),
+ListTile(title:const Text("Seat Map"),onTap:(){showDialog(context:context,builder:(_)=>AlertDialog(title:const Text("Seat Map"),content:Wrap(spacing:5,children:[for(int i=1;i<=30;i++) Builder(builder:(_){final s="A${i.toString().padLeft(2,'0')}";return Container(padding:const EdgeInsets.all(6),color:used.contains(s)?Colors.red:Colors.green,child:Text(s,style:const TextStyle(color:Colors.white,fontSize:10)));})]),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text("OK"))]));}),
+ListTile(title:const Text("Daily Sales Report"),onTap:(){final today=DateTime.now().toString().substring(0,10);final tod=sales.where((e)=>e['date']==today).toList();final money=tod.fold<double>(0,(a,b)=>a+(b['fare'] as num).toDouble());showDialog(context:context,builder:(_)=>AlertDialog(title:Text("Report $today"),content:Text("Today: ${tod.length} tickets\nGHS $money\nAll: ${sales.length}\nSeats left: ${30-used.length}/30"),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text("OK"))]));}),
+ListTile(title:const Text("Export CSV"),onTap:(){final buf=StringBuffer("Ticket,Date,Name,From,To,Fare,Seat,SoldBy\n");for(var r in sales) buf.writeln("${r['ticket_id']},${r['date']},${r['name']},${r['from']},${r['to']},${r['fare']},${r['seat']},${r['sold_by']}");showDialog(context:context,builder:(_)=>AlertDialog(title:const Text("CSV Export"),content:SingleChildScrollView(child:Text(buf.toString(),style:const TextStyle(fontSize:8))),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text("OK"))]));}),
+ListTile(tileColor:Colors.red[100],title:const Text("Reset Seats"),onTap:(){setState(()=>used=[]);_save();}),
+ListTile(title:const Text("Logout"),onTap:(){setState((){curU="Guest";curR="passenger";curS="Head Office";});_save();}),
 ]
-]));
-}
-
-Widget btn(String t,Color c,VoidCallback f)=>Padding(padding:const EdgeInsets.only(bottom:10),child:ElevatedButton(style:ElevatedButton.styleFrom(backgroundColor:c,padding:const EdgeInsets.all(16)),onPressed:f,child:Text(t,style:const TextStyle(color:Colors.white,fontWeight:FontWeight.bold))));
-
-// PASSENGER - CHECK ONLY
-void openPassenger(){
-String from='',to='';double? found;
-showDialog(context:context,builder:(d)=>StatefulBuilder(builder:(c,setS)=>AlertDialog(title:const Text('PASSENGER CHECK FARE'),content:Column(mainAxisSize:MainAxisSize.min,children:[
-TextField(decoration:const InputDecoration(labelText:'From'),onChanged:(v)=>from=v.toLowerCase()),
-TextField(decoration:const InputDecoration(labelText:'To'),onChanged:(v)=>to=v.toLowerCase()),
-if(found!=null)Padding(padding:const EdgeInsets.only(top:10),child:Text('FARE: GHS ${found!.toStringAsFixed(2)}',style:const TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:Colors.green))),
-]),actions:[
-TextButton(onPressed:(){
-var f=fares[from.trim()];if(f!=null&&f.containsKey(to.trim())){setS(()=>found=f[to.trim()]);}
-else{setS(()=>found=null); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('No route found')));}
-},child:const Text('CHECK')),
-TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Close'))
-])));
-}
-
-// LOGIN
-void openLogin(){
-String u='',p='';
-showDialog(context:context,builder:(d)=>AlertDialog(title:const Text('Station Master Login'),content:Column(mainAxisSize:MainAxisSize.min,children:[
-TextField(decoration:const InputDecoration(labelText:'Username'),onChanged:(v)=>u=v.toLowerCase()),
-TextField(decoration:const InputDecoration(labelText:'Password'),obscureText:true,onChanged:(v)=>p=v),
-]),actions:[
-TextButton(onPressed:(){
-if(users.containsKey(u)&&users[u]['pw']==hash(p)){
-setState((){curUser=u;curRole=users[u]['role'];curStation=users[u]['station'];});
-Navigator.pop(d);
-}else{ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Wrong!')));}
-},child:const Text('Login'))
-]));
-}
-
-// ADMIN CREATE
-void openAdminCreate(){
-String nu='',np='',fn='',st=''; String adminP='';
-showDialog(context:context,builder:(d)=>StatefulBuilder(builder:(c,setS)=>AlertDialog(title:const Text('Admin - Create Station'),content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
-if(users.length>1)TextField(decoration:const InputDecoration(labelText:'Admin Password to confirm'),obscureText:true,onChanged:(v)=>adminP=v),
-TextField(decoration:const InputDecoration(labelText:'New Username (one word)'),onChanged:(v)=>nu=v.toLowerCase()),
-TextField(decoration:const InputDecoration(labelText:'Full Name'),onChanged:(v)=>fn=v),
-TextField(decoration:const InputDecoration(labelText:'Password'),onChanged:(v)=>np=v),
-TextField(decoration:const InputDecoration(labelText:'Station'),onChanged:(v)=>st=v),
-const SizedBox(height:10),
-...users.entries.map((e)=>Text('${e.key} | ${e.value['name']} | ${e.value['station']} | ${e.value['role']}',style:const TextStyle(fontSize:11))).toList()
-])),actions:[
-TextButton(onPressed:(){
-if(users.length>1&&hash(adminP)!=users['admin']['pw']){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Admin auth failed')));return;}
-if(nu.isEmpty||np.isEmpty||users.containsKey(nu)){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Invalid username')));return;}
-users[nu]={'pw':hash(np),'station':st,'role':'station_master','name':fn};saveAll();setState((){});Navigator.pop(c);
-ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Created $fn')));
-},child:const Text('Create')),
-TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Close'))
-])));
-}
-
-// SELL
-void openSell(){
-String name='',from='',to='';String seat='';
-List<String> allSeats=[for(var i=1;i<=30;i++)'A${i.toString().padLeft(2,'0')}'];
-List<String> avail=[for(var s in allSeats)if(!usedSeats.contains(s))s];
-showDialog(context:context,builder:(d)=>StatefulBuilder(builder:(c,setS)=>AlertDialog(title:const Text('SELL TICKET'),content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
-TextField(decoration:const InputDecoration(labelText:'Passenger Name'),onChanged:(v)=>name=v),
-TextField(decoration:const InputDecoration(labelText:'From'),onChanged:(v)=>from=v.toLowerCase()),
-TextField(decoration:const InputDecoration(labelText:'To'),onChanged:(v)=>to=v.toLowerCase()),
-DropdownButton<String>(value:seat.isEmpty?null:seat,hint:Text('Seat ${avail.isNotEmpty?avail.first:''}'),items:avail.map((e)=>DropdownMenuItem(value:e,child:Text(e))).toList(),onChanged:(v)=>setS(()=>seat=v??''))
-])),actions:[
-TextButton(onPressed:(){
-if(from.isEmpty||to.isEmpty||name.isEmpty)return;
-var fare=fares[from.trim()]?[to.trim()];
-if(fare==null){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('No route')));return;}
-if(seat.isEmpty)seat=avail.first;
-var tid='T${DateTime.now().millisecondsSinceEpoch.toString().substring(8)}';
-var qr='REALME|$tid|$seat|${from.toUpperCase()}-${to.toUpperCase()}|$fare|${DateTime.now()}|${curUser}';
-var sale={'ticket_id':tid,'name':name,'from':from,'to':to,'fare':fare,'seat':seat,'sold_by':curUser,'date':DateTime.now().toString().split(' ')[0],'time':DateTime.now().toString().split(' ')[1].substring(0,5),'qr':qr,'used':false};
-sales.add(sale);usedSeats.add(seat);saveAll();setState((){});Navigator.pop(c);
-showDialog(context:context,builder:(b)=>AlertDialog(title:Text('SOLD $tid'),content:Column(mainAxisSize:MainAxisSize.min,children:[Text('Route ${from.toUpperCase()} -> ${to.toUpperCase()}\nSeat $seat\nGHS $fare'),const SizedBox(height:10),QrImageView(data:qr,size:180,version:QrVersions.auto)]),actions:[TextButton(onPressed:()=>Navigator.pop(b),child:const Text('Done'))]));
-},child:const Text('SELL & PRINT QR'))
-]));
-}
-
-void openVerify(){
-final ctrl=MobileScannerController();
-showDialog(context:context,builder:(d)=>AlertDialog(title:const Text('Verify Ticket'),content:SizedBox(height:300,width:300,child:MobileScanner(controller:ctrl,onDetect:(cap){
-var raw=cap.barcodes.first.rawValue??'';
-if(!raw.startsWith('REALME|'))return;
-var tid=raw.split('|')[1];
-var found=sales.where((e)=>e['ticket_id']==tid).toList();
-if(found.isEmpty){ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('FAKE! $tid not found')));}
-else if(found.first['used']==true){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('ALREADY USED! FRAUD BLOCK')));}
-else{found.first['used']=true;saveAll();setState((){});ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('VALID! ${found.first['name']} ${found.first['from']}->${found.first['to']} Seat ${found.first['seat']}')));Navigator.pop(d);}
-})),actions:[TextButton(onPressed:()=>Navigator.pop(d),child:const Text('Close'))]));
-}
-
-void openRoutes()=>showDialog(context:context,builder:(d)=>AlertDialog(title:const Text('All Routes'),content:SingleChildScrollView(child:Column(children:[for(var fs in fares.keys)for(var ts in fares[fs]!.keys)if(fs.compareTo(ts)<0)Text('${fs.toUpperCase()} <-> ${ts.toUpperCase()} : GHS ${fares[fs]![ts]}')])),actions:[TextButton(onPressed:()=>Navigator.pop(d),child:const Text('Close'))]));
-void openReport(){
-var today=DateTime.now().toString().split(' ')[0];var todaySales=sales.where((e)=>e['date']==today).toList();double tot=todaySales.fold(0,(p,e)=>p+(e['fare'] as num).toDouble());
-showDialog(context:context,builder:(d)=>AlertDialog(title:Text('Sales $today'),content:Text('Total: ${todaySales.length} tickets\nMoney: GHS ${tot.toStringAsFixed(2)}\nSeats left: ${30-usedSeats.length}/30'),actions:[TextButton(onPressed:()=>Navigator.pop(d),child:const Text('Close'))]));
-}
-void openSeatMap()=>showDialog(context:context,builder:(d)=>AlertDialog(title:const Text('Seat Map'),content:SingleChildScrollView(child:Wrap(children:[for(var i=1;i<=30;i++)Padding(padding:const EdgeInsets.all(4),child:Container(padding:const EdgeInsets.all(8),color:usedSeats.contains('A${i.toString().padLeft(2,'0')}')?Colors.red:Colors.green,child:Text('A${i.toString().padLeft(2,'0')}',style:const TextStyle(color:Colors.white))))])),actions:[TextButton(onPressed:()=>Navigator.pop(d),child:const Text('Close'))]));
-void resetSeats(){usedSeats.clear();saveAll();setState((){});ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Seats reset done')));}
-           }
+]));}}
+class VerifyPage extends StatelessWidget{final List<Map<String,dynamic>> sales;const VerifyPage({super.key,required this.sales});@override Widget build(BuildContext c){return Scaffold(appBar:AppBar(title:const Text("Verify REALME|")),body:Column(children:[Expanded(child:MobileScanner(onDetect:(cap){final raw=cap.barcodes.first.rawValue??"";if(!raw.startsWith("REALME|"))return;final tid=raw.split("|")[1];final found=sales.where((e)=>e['ticket_id']==tid).toList();showDialog(context:c,builder:(_)=>AlertDialog(title:Text(found.isNotEmpty?"VALID":"FAKE"),content:Text(found.isNotEmpty?jsonEncode(found.first):"Fake $tid"),actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text("OK"))]));})),Padding(padding:const EdgeInsets.all(10),child:TextField(decoration:const InputDecoration(labelText:"Paste REALME|..."),onSubmitted:(raw){if(!raw.startsWith("REALME|"))return;final tid=raw.split("|")[1];final found=sales.where((e)=>e['ticket_id']==tid).toList();showDialog(context:c,builder:(_)=>AlertDialog(title:Text(found.isNotEmpty?"VALID":"FAKE"),content:Text(found.isNotEmpty?jsonEncode(found.first):"Fake"),actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text("OK"))]));}))]));}}
