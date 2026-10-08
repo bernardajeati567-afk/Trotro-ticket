@@ -12,12 +12,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-      - name: Recreate android if missing
-        run: |
-          if [! -d "android" ]; then
-            flutter create. --platforms=android --no-pub
-          fi
-          ls android/app/
+      - name: Fix android
+        run: flutter create. --platforms=android
       - name: Build APK
         run: |
           flutter pub get
