@@ -12,14 +12,14 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-      - name: Fix android
-        run: flutter create. --platforms=android
+      - name: Create android
+        run: flutter create . --platforms=android
+      - name: Get packages
+        run: flutter pub get
       - name: Build APK
-        run: |
-          flutter pub get
-          flutter build apk --release --no-tree-shake-icons
+        run: flutter build apk --release --no-tree-shake-icons
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apkk
