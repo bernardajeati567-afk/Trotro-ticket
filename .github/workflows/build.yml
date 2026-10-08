@@ -15,8 +15,7 @@ jobs:
       - name: Recreate android if missing
         run: |
           if [! -d "android" ]; then
-            echo "Android folder missing - creating new Flutter android project"
-            flutter create --platforms=android.
+            flutter create. --platforms=android --no-pub
           fi
           ls android/app/
       - name: Build APK
