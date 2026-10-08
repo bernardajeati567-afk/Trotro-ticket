@@ -19,7 +19,7 @@ jobs:
         run: |
           mv lib/main.dart /tmp/main.dart.bak
           mv pubspec.yaml /tmp/pubspec.yaml.bak
-          flutter create . --platforms=android
+          flutter create . --project-name trotro_ticket --org com.trotro.gov --platforms=android --no-pub
           mv /tmp/main.dart.bak lib/main.dart
           mv /tmp/pubspec.yaml.bak pubspec.yaml
           flutter pub get
