@@ -1,0 +1,30 @@
+name: FIX - Create Android Folder
+
+on: workflow_dispatch
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Create Android Folder PERMANENTLY
+        run: |
+          flutter create . --platforms=android --org com.trotroticket.app --project-name trotro_ticket --no-overwrite
+          rm -rf .github/workflows/fix-android.yml
+
+      - name: Push Android Folder to GitHub
+        run: |
+          git config --global user.name "Trotro Bot"
+          git config --global user.email "bot@trotro.com"
+          git add android/
+          git add .
+          git commit -m "FIX: Add android folder for APK build" || echo "No changes"
+          git push
