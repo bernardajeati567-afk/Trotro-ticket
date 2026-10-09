@@ -1,39 +1,51 @@
-name: Build Trotro APK
+name: Trotro APK Builder
 
 on:
   push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-apk:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: 1. Get your Trotro code
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: 2. Setup Java 17 (Android needs it)
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Flutter
+      - name: 3. Setup Flutter 3.24
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
 
-      - name: Check Flutter
-        run: flutter --version
+      - name: 4. FIX - Create Android folder if missing
+        run: |
+          if [ ! -d "android" ]; then
+            echo "Android folder missing - creating now..."
+            flutter create . --platforms=android --org com.trotroticket.app --project-name trotro_ticket
+          else
+            echo "Android folder exists - good!"
+          fi
 
-      - name: Get packages
-        run: flutter pub get
+      - name: 5. Clean and Get Packages
+        run: |
+          flutter clean
+          flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --release --no-tree-shake-icons
+      - name: 6. BUILD APK FOR YOUR REALME!
+        run: flutter build apk --debug --no-tree-shake-icons
 
-      - name: Upload APK
+      - name: 7. Upload APK - Download it!
         uses: actions/upload-artifact@v4
         with:
-          name: trotro-v11-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: Trotro-Ticket-APK
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
