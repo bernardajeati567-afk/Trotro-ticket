@@ -1,5 +1,5 @@
 name: trotro_ticket
-description: REAL ME TROTRO - QR ticket app for Trotro busses with fraud lock - Government Approved
+description: QR ticket app for Trotro busses with fraud lock
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,11 +9,13 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.6
-  qr_flutter: ^4.1.0
-  mobile_scanner: ^3.5.7
-  shared_preferences: ^2.2.2
-  crypto: ^3.0.3
+  cupertino_icons: ^1.0.2
+  sqflite: ^2.3.0
+  path: ^1.8.3
+  path_provider: ^2.1.1
+  crypto: ^2.0.0
+  pdf: ^3.10.0
+  printing: ^5.11.0
 
 dev_dependencies:
   flutter_test:
@@ -22,3 +24,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/
