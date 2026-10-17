@@ -21,7 +21,6 @@ String hashPassword(String p) {
   final salt = Random.secure().toString() + DateTime.now().millisecondsSinceEpoch.toString();
   final s = sha256.convert(utf8.encode(salt)).toString().substring(0, 32);
   final bytes = utf8.encode(p + s);
-  // PBKDF2 simulation: 100000 iterations simplified with sha256 chain
   var h = sha256.convert(bytes);
   for (int i = 0; i < 1000; i++) {
     h = sha256.convert(h.bytes);
@@ -71,7 +70,6 @@ Future<void> initDB() async {
   if (count == 0) {
     await db.insert('users', {'username': 'admin', 'password': hashPassword("Ad1My"), 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'});
   }
-  // ADMIN SECURE FIX: No more reset on every run - Admin created once only
   final dir = await getApplicationDocumentsDirectory();
   final f = File(path.join(dir.path, fareFile));
   if (await f.exists()) {
@@ -302,7 +300,6 @@ Future<String> exportSalesToExcel({required bool todayOnly}) async {
   sb.writeln("TOTAL,${rows.length}");
   sb.writeln("MONEY,GHS ${tot.toStringAsFixed(2)}");
   await csvFile.writeAsString(sb.toString());
-  // Excel xlsx via csv - Excel can open csv, xlsx file creation requires excel package, fallback to csv path
   return "CSV: ${csvFile.path} | ${rows.length} tickets";
 }
 
@@ -546,8 +543,8 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
       }, child: const Text("ADD ROUTE")),
       const Divider(),
       ElevatedButton(onPressed: () { String s = ""; for (var fs in routes.keys) { for (var ts in routes[fs]!.keys) { if (fs.compareTo(ts) < 0) s += "${titleCase(fs)} <-> ${titleCase(ts)}: GHS ${routes[fs]![ts]!.toStringAsFixed(2)}\n"; } } setState(() => info = s); }, child: const Text("4. View all routes")),
-      ElevatedButton(onPressed: () async { setState(() => info = await showSalesReport()); }, child: const Text("5. Daily Sales Report")),
-      ElevatedButton(onPressed: () async { setState(() => info = await showSeatMap()); }, child: const Text("6. Seat Map (Station Only)")),
+      ElevatedButton(onPressed: () async { final r = await showSalesReport(); setState(() => info = r); }, child: const Text("5. Daily Sales Report")),
+      ElevatedButton(onPressed: () async { final r = await showSeatMap(); setState(() => info = r); }, child: const Text("6. Seat Map (Station Only)")),
       ElevatedButton(onPressed: () async { final r1 = await exportSalesToExcel(todayOnly: true); final r2 = await exportSalesToExcel(todayOnly: false); setState(() => info = "$r1\n$r2"); }, child: const Text("7. Export Sales to Excel/CSV (Station Only)")),
       ElevatedButton(onPressed: () async { final db = await AppDB.getDB(); await db.delete('seats'); setState(() => info = "Reset done"); }, child: const Text("8. Reset seats")),
       ElevatedButton(onPressed: () { currentUser = null; Navigator.pop(context); }, child: const Text("9. Logout")),
