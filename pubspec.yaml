@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.4.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -13,9 +13,9 @@ dependencies:
   sqflite: ^2.3.0
   path: ^1.8.3
   path_provider: ^2.1.1
-  crypto: ^2.0.0
-  pdf: ^3.10.0
-  printing: ^5.11.0
+  crypto: ^3.0.3
+  pdf: 3.10.7
+  printing: ^5.12.0
 
 dev_dependencies:
   flutter_test:
