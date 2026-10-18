@@ -31,6 +31,9 @@ jobs:
       - name: Check icon file
         run: ls -lh assets/icon.png
 
+      - name: Install Icon Package
+        run: dart pub add flutter_launcher_icons
+
       - name: Generate App Icon
         run: dart run flutter_launcher_icons
 
