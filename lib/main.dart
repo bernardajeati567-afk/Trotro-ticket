@@ -353,8 +353,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
 class StationMasterScreen extends StatefulWidget { final String username; const StationMasterScreen({super.key, required this.username}); @override State<StationMasterScreen> createState() => _StationMasterScreenState(); }
 class _StationMasterScreenState extends State<StationMasterScreen> {
-  final nameC = TextEditingController(); final fromC = TextEditingController(); final toC = TextEditingController(); final fareC = TextEditingController(); final newFromC = TextEditingController(); final newToC = TextEditingController(); final newFareC = TextEditingController();
-  String? fromVal; String? toVal; String info = ""; Map<String, dynamic>? lastSale;
+  // SELL TICKET controllers
+  final nameC = TextEditingController(); final fromC = TextEditingController(); final toC = TextEditingController();
+  String? fromVal; String? toVal;
+  // UPDATE FARE - SEPARATE controllers - THIS IS THE FIX
+  final updFromC = TextEditingController(); final updToC = TextEditingController(); final updFareC = TextEditingController();
+  String? updFromVal; String? updToVal;
+  // ADD ROUTE controllers
+  final newFromC = TextEditingController(); final newToC = TextEditingController(); final newFareC = TextEditingController();
+  String info = ""; Map<String, dynamic>? lastSale;
   Future<void> doPrint(Map<String, dynamic> sale) async {
     try {
       final pdfPath = await generatePdfTicket(sale);
@@ -407,16 +414,36 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
           ElevatedButton(onPressed: () => doPrint(lastSale!), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(14)), child: const Text("🖨️ PRINT THIS TICKET")),
         ])),
       ],
-      const Divider(),
-      const Text("2. Update fare"),
-      TextField(controller: fareC, decoration: const InputDecoration(labelText: "New fare"), keyboardType: TextInputType.number),
-      ElevatedButton(onPressed: () async {
-        final fs = resolveStation(fromC.text, fromVal);
-        final ts = resolveStation(toC.text, toVal);
-        if (fs.isEmpty || ts.isEmpty) return;
-        final np = double.tryParse(fareC.text); if (np == null) return;
-        routes.putIfAbsent(fs, () => {})[ts] = np; routes.putIfAbsent(ts, () => {})[fs] = np; await saveFares(routes); setState(() => info = "Fare updated");
-      }, child: const Text("UPDATE FARE")),
+      const Divider(height: 30),
+      // ===== 2. UPDATE FARE - NEW SIMPLE BOX =====
+      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: ghGold, width: 2), borderRadius: BorderRadius.circular(8)), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text("2. UPDATE FARE", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: ghRed)),
+        const SizedBox(height: 8),
+        const Text("1st Route:", style: TextStyle(fontWeight: FontWeight.bold)),
+        DropdownButtonFormField<String>(value: updFromVal, decoration: const InputDecoration(labelText: "1st Route - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { updFromVal = v; updFromC.text = v ?? ""; }); }),
+        TextField(controller: updFromC, decoration: const InputDecoration(labelText: "1st Route - Or Type Here", hintText: "e.g. Swedru")),
+        const SizedBox(height: 8),
+        const Text("2nd Route:", style: TextStyle(fontWeight: FontWeight.bold)),
+        DropdownButtonFormField<String>(value: updToVal, decoration: const InputDecoration(labelText: "2nd Route - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { updToVal = v; updToC.text = v ?? ""; }); }),
+        TextField(controller: updToC, decoration: const InputDecoration(labelText: "2nd Route - Or Type Here", hintText: "e.g. Cape Coast")),
+        const SizedBox(height: 8),
+        TextField(controller: updFareC, decoration: const InputDecoration(labelText: "Enter New Fare - GHS", hintText: "e.g. 20.00", prefixText: "GHS "), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+        const SizedBox(height: 8),
+        ElevatedButton(onPressed: () async {
+          final fs = resolveStation(updFromC.text, updFromVal);
+          final ts = resolveStation(updToC.text, updToVal);
+          if (fs.isEmpty || ts.isEmpty) { setState(() => info = "⚠️ Select or type 1st and 2nd Route!"); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Select 1st and 2nd Route first!"))); return; }
+          final np = double.tryParse(updFareC.text.trim());
+          if (np == null || np <= 0) { setState(() => info = "⚠️ Enter valid fare e.g. 20.00"); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter valid fare!"))); return; }
+          final oldFare = routes[fs]?[ts];
+          routes.putIfAbsent(fs, () => {})[ts] = np; routes.putIfAbsent(ts, () => {})[fs] = np; await saveFares(routes);
+          setState(() => info = "✅ FARE UPDATED! ${titleCase(fs)} <-> ${titleCase(ts)} : GHS ${oldFare?.toStringAsFixed(2) ?? '-'} -> GHS ${np.toStringAsFixed(2)}");
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("✅ Updated ${titleCase(fs)} -> ${titleCase(ts)} to GHS ${np.toStringAsFixed(2)}")));
+          updFareC.clear();
+        }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(14)), child: const Text("UPDATE FARE")),
+        const SizedBox(height: 6),
+        Text("Current: ${(() { final fs = resolveStation(updFromC.text, updFromVal); final ts = resolveStation(updToC.text, updToVal); if (fs.isEmpty || ts.isEmpty) return "Select both routes to see current fare"; final f = routes[fs]?[ts]; return f == null ? "No fare yet for ${titleCase(fs)} -> ${titleCase(ts)}" : "${titleCase(fs)} -> ${titleCase(ts)} = GHS ${f.toStringAsFixed(2)}"; })()}", style: const TextStyle(color: Colors.black87)),
+      ])),
       const Divider(),
       const Text("3. Add NEW route"),
       TextField(controller: newFromC, decoration: const InputDecoration(labelText: "From")),
