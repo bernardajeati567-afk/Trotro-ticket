@@ -15,6 +15,8 @@ jobs:
       - run: flutter pub get
       - run: flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android .
       - run: flutter pub get
+      - run: dart pub add flutter_launcher_icons
+      - run: flutter pub run flutter_launcher_icons:generate
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
