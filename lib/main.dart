@@ -247,9 +247,16 @@ class _PassengerScreenState extends State<PassengerScreen> {
         final fs = resolveStation(fromC.text, fromVal);
         final ts = resolveStation(toC.text, toVal);
         if (fs.isEmpty || ts.isEmpty) { setState(() => result = "Select or type From and To"); return; }
+        // CHANGE 2 - CHECK FARE WARNING: show fare + warning text
         if (routes.containsKey(fs) && routes[fs]!.containsKey(ts)) { setState(() => result = "FARE: ${titleCase(fs)} -> ${titleCase(ts)} = GHS ${routes[fs]![ts]!.toStringAsFixed(2)}"); } else { setState(() => result = "No route from $fs to $ts"); }
       }, child: const Text("CHECK FARE")),
-      const SizedBox(height: 16), Text(result, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 16),
+      Text(result, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+      // CHANGE 2 - Warning box only shows when fare is found
+      if (result.startsWith("FARE:")) ...[
+        const SizedBox(height: 12),
+        Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.shade50, border: Border.all(color: ghRed, width: 2), borderRadius: BorderRadius.circular(8)), child: const Text("⚠️ Don't pay any amount except this fare! If driver asks for more, do NOT pay.", textAlign: TextAlign.center, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: ghRed))),
+      ],
     ])));
   }
 }
@@ -353,13 +360,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
 class StationMasterScreen extends StatefulWidget { final String username; const StationMasterScreen({super.key, required this.username}); @override State<StationMasterScreen> createState() => _StationMasterScreenState(); }
 class _StationMasterScreenState extends State<StationMasterScreen> {
-  // SELL TICKET controllers
   final nameC = TextEditingController(); final fromC = TextEditingController(); final toC = TextEditingController();
   String? fromVal; String? toVal;
-  // UPDATE FARE - SEPARATE controllers - THIS IS THE FIX
   final updFromC = TextEditingController(); final updToC = TextEditingController(); final updFareC = TextEditingController();
   String? updFromVal; String? updToVal;
-  // ADD ROUTE controllers
   final newFromC = TextEditingController(); final newToC = TextEditingController(); final newFareC = TextEditingController();
   String info = ""; Map<String, dynamic>? lastSale;
   Future<void> doPrint(Map<String, dynamic> sale) async {
@@ -398,13 +402,13 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         final seat = seats.first;
         await saveSeat(seat);
         final sale = await saveSale(nameC.text.trim(), fs, ts, fare, seat);
-        setState(() { lastSale = sale; info = "SOLD! ${sale['ticket_id']} | Seat $seat | Fare GHS ${fare.toStringAsFixed(2)}"; });
+        // CHANGE 1 - AUTO CLEAR after SELL TICKET
+        setState(() { lastSale = sale; info = "SOLD! ${sale['ticket_id']} | Seat $seat | Fare GHS ${fare.toStringAsFixed(2)}"; nameC.clear(); fromC.clear(); toC.clear(); fromVal = null; toVal = null; });
         if (!context.mounted) return;
         showDialog(context: context, builder: (_) => AlertDialog(title: const Text("✅ TICKET SOLD!"), content: Text("Ticket: ${sale['ticket_id']}\nPassenger: ${sale['name']}\nRoute: ${titleCase(fs)} -> ${titleCase(ts)}\nSeat: $seat\nFare: GHS ${fare.toStringAsFixed(2)} PAID\nDate: ${sale['date']} ${sale['time']}\n\nPDF saved in app folder."), actions: [
           TextButton(onPressed: () async { Navigator.pop(context); await doPrint(sale); }, child: const Text("🖨️ PRINT TICKET")),
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK")),
         ]));
-        nameC.clear();
       }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)), child: const Text("SELL TICKET - TAP HERE")),
       if (lastSale != null) ...[
         const SizedBox(height: 12),
@@ -415,7 +419,6 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         ])),
       ],
       const Divider(height: 30),
-      // ===== 2. UPDATE FARE - NEW SIMPLE BOX =====
       Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: ghGold, width: 2), borderRadius: BorderRadius.circular(8)), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const Text("2. UPDATE FARE", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: ghRed)),
         const SizedBox(height: 8),
@@ -437,9 +440,9 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
           if (np == null || np <= 0) { setState(() => info = "⚠️ Enter valid fare e.g. 20.00"); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter valid fare!"))); return; }
           final oldFare = routes[fs]?[ts];
           routes.putIfAbsent(fs, () => {})[ts] = np; routes.putIfAbsent(ts, () => {})[fs] = np; await saveFares(routes);
-          setState(() => info = "✅ FARE UPDATED! ${titleCase(fs)} <-> ${titleCase(ts)} : GHS ${oldFare?.toStringAsFixed(2) ?? '-'} -> GHS ${np.toStringAsFixed(2)}");
+          // CHANGE 1 - AUTO CLEAR after UPDATE FARE
+          setState(() { info = "✅ FARE UPDATED! ${titleCase(fs)} <-> ${titleCase(ts)} : GHS ${oldFare?.toStringAsFixed(2) ?? '-'} -> GHS ${np.toStringAsFixed(2)}"; updFromC.clear(); updToC.clear(); updFareC.clear(); updFromVal = null; updToVal = null; });
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("✅ Updated ${titleCase(fs)} -> ${titleCase(ts)} to GHS ${np.toStringAsFixed(2)}")));
-          updFareC.clear();
         }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(14)), child: const Text("UPDATE FARE")),
         const SizedBox(height: 6),
         Text("Current: ${(() { final fs = resolveStation(updFromC.text, updFromVal); final ts = resolveStation(updToC.text, updToVal); if (fs.isEmpty || ts.isEmpty) return "Select both routes to see current fare"; final f = routes[fs]?[ts]; return f == null ? "No fare yet for ${titleCase(fs)} -> ${titleCase(ts)}" : "${titleCase(fs)} -> ${titleCase(ts)} = GHS ${f.toStringAsFixed(2)}"; })()}", style: const TextStyle(color: Colors.black87)),
