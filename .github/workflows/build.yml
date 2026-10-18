@@ -24,21 +24,27 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
+      - name: Create Android folder if missing - THIS IS THE FIX
+        run: |
+          ls -la
+          if [ ! -f "android/app/src/main/AndroidManifest.xml" ]; then
+            echo "Android folder missing - creating it now"
+            flutter create . --platforms=android
+          else
+            echo "Android folder found"
+          fi
+          ls -l android/app/src/main/AndroidManifest.xml
+
       - name: Check icon file exists
         run: |
           ls -l assets/
-          echo "--- CHECKING ICON ---"
           ls -lh assets/icon.png
 
       - name: Get packages
         run: flutter pub get
 
-      - name: Generate App Icon - THIS IS THE FIX
+      - name: Generate App Icon
         run: dart run flutter_launcher_icons
-
-      - name: Verify icon generated
-        run: |
-          ls -l android/app/src/main/res/mipmap-*/ic_launcher.png || echo "Icon not generated"
 
       - name: Build APK Release
         run: flutter build apk --release
