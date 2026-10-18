@@ -1,56 +1,43 @@
-name: Build Trotro APK
-
+name: Build APK
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      - name: Create Android folder if missing - THIS IS THE FIX
-        run: |
-          ls -la
-          if [ ! -f "android/app/src/main/AndroidManifest.xml" ]; then
-            echo "Android folder missing - creating it now"
-            flutter create . --platforms=android
-          else
-            echo "Android folder found"
-          fi
-          ls -l android/app/src/main/AndroidManifest.xml
+      - run: flutter pub get
 
-      - name: Check icon file exists
-        run: |
-          ls -l assets/
-          ls -lh assets/icon.png
+      - name: Create Android folder
+        run: flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android --overwrite .
 
-      - name: Get packages
-        run: flutter pub get
+      - run: flutter pub get
+
+      - name: Check icon file
+        run: ls -lh assets/icon.png
 
       - name: Generate App Icon
         run: dart run flutter_launcher_icons
 
-      - name: Build APK Release
+      - name: Build APK
         run: flutter build apk --release
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: trotro-app
+          name: app-release
           path: build/app/outputs/flutter-apk/app-release.apk
