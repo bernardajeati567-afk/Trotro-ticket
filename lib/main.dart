@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 // ============ CONSTANTS ============
 const String dbFile = "trotro.db";
@@ -193,7 +194,6 @@ String suggestStation(String u, Map<String, Map<String, double>> routes, {bool F
   if (best != null) { final found = noSpace[best]!; if (onConfirm == null || onConfirm(found)) return found; }
   return u.toLowerCase().trim();
 }
-// Helper: typing wins if typed, else dropdown
 String resolveStation(String typedText, String? dropVal) {
   if (typedText.trim().isNotEmpty) return suggestStation(typedText, routes);
   if (dropVal != null) return dropVal;
@@ -229,7 +229,6 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   }
 }
 
-// PASSENGER - BOTH Dropdown + Typing
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = "";
@@ -266,7 +265,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
       return Scaffold(appBar: AppBar(title: const Text("ADMIN - LOCKED"), backgroundColor: ghRed), body: Padding(padding: const EdgeInsets.all(16), child: Column(children: [
         const Icon(Icons.lock, size: 60, color: ghRed),
         const Text("ADMIN ONLY - LOGIN FIRST", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        const Text("User: admin  |  Password: Ad1My"),
+        const Text("Authorized access only", style: TextStyle(fontSize: 12, color: Colors.grey)),
         TextField(controller: adminU, decoration: const InputDecoration(labelText: "Admin Username")),
         TextField(controller: adminP, obscureText: true, decoration: const InputDecoration(labelText: "Admin Password")),
         const SizedBox(height: 12),
@@ -352,23 +351,36 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-// STATION MASTER - BOTH Dropdown + Typing
 class StationMasterScreen extends StatefulWidget { final String username; const StationMasterScreen({super.key, required this.username}); @override State<StationMasterScreen> createState() => _StationMasterScreenState(); }
 class _StationMasterScreenState extends State<StationMasterScreen> {
   final nameC = TextEditingController(); final fromC = TextEditingController(); final toC = TextEditingController(); final fareC = TextEditingController(); final newFromC = TextEditingController(); final newToC = TextEditingController(); final newFareC = TextEditingController();
-  String? fromVal; String? toVal; String info = "";
+  String? fromVal; String? toVal; String info = ""; Map<String, dynamic>? lastSale;
+  Future<void> doPrint(Map<String, dynamic> sale) async {
+    try {
+      final pdfPath = await generatePdfTicket(sale);
+      final bytes = await File(pdfPath).readAsBytes();
+      await Printing.sharePdf(bytes: bytes, filename: 'ticket_${sale['ticket_id']}.pdf');
+    } catch (_) {
+      final p = await printSmallPaper(sale);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("PRINT FILE: $p")));
+    }
+  }
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(appBar: AppBar(title: Text("Welcome ${users[widget.username]!['full_name']} - ${users[widget.username]!['station']}")), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Text("STATION MASTER - SELL TICKET", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
       const SizedBox(height: 12),
-      TextField(controller: nameC, decoration: const InputDecoration(labelText: "Passenger Name")),
+      Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.yellow.shade100, border: Border.all(color: ghGold, width: 2), borderRadius: BorderRadius.circular(8)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text("STEP 1: PASSENGER NAME *", style: TextStyle(fontWeight: FontWeight.bold, color: ghRed)),
+        TextField(controller: nameC, decoration: const InputDecoration(labelText: "Type Passenger Name Here", hintText: "e.g. Kwame Mensah", border: OutlineInputBorder())),
+      ])),
+      const SizedBox(height: 12),
       DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { fromVal = v; fromC.text = v ?? ""; }); }),
       TextField(controller: fromC, decoration: const InputDecoration(labelText: "From - Or Type Here")),
       DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { toVal = v; toC.text = v ?? ""; }); }),
       TextField(controller: toC, decoration: const InputDecoration(labelText: "To - Or Type Here")),
       ElevatedButton(onPressed: () async {
-        if (nameC.text.trim().isEmpty) { setState(() => info = "Enter passenger name!"); return; }
+        if (nameC.text.trim().isEmpty) { setState(() => info = "⚠️ Enter passenger name first! Type name in yellow box at top."); return; }
         final fs = resolveStation(fromC.text, fromVal);
         final ts = resolveStation(toC.text, toVal);
         if (fs.isEmpty || ts.isEmpty) { setState(() => info = "Select or type From and To!"); return; }
@@ -379,11 +391,22 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         final seat = seats.first;
         await saveSeat(seat);
         final sale = await saveSale(nameC.text.trim(), fs, ts, fare, seat);
-        setState(() => info = "SOLD! ${sale['ticket_id']} | Seat $seat | Fare GHS ${fare.toStringAsFixed(2)}");
+        setState(() { lastSale = sale; info = "SOLD! ${sale['ticket_id']} | Seat $seat | Fare GHS ${fare.toStringAsFixed(2)}"; });
         if (!context.mounted) return;
-        showDialog(context: context, builder: (_) => AlertDialog(title: const Text("TICKET SOLD!"), content: Text("Ticket: ${sale['ticket_id']}\nPassenger: ${sale['name']}\nRoute: ${titleCase(fs)} -> ${titleCase(ts)}\nSeat: $seat\nFare: GHS ${fare.toStringAsFixed(2)} PAID\n\nPDF saved in app folder."), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK"))]));
+        showDialog(context: context, builder: (_) => AlertDialog(title: const Text("✅ TICKET SOLD!"), content: Text("Ticket: ${sale['ticket_id']}\nPassenger: ${sale['name']}\nRoute: ${titleCase(fs)} -> ${titleCase(ts)}\nSeat: $seat\nFare: GHS ${fare.toStringAsFixed(2)} PAID\nDate: ${sale['date']} ${sale['time']}\n\nPDF saved in app folder."), actions: [
+          TextButton(onPressed: () async { Navigator.pop(context); await doPrint(sale); }, child: const Text("🖨️ PRINT TICKET")),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK")),
+        ]));
         nameC.clear();
       }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)), child: const Text("SELL TICKET - TAP HERE")),
+      if (lastSale != null) ...[
+        const SizedBox(height: 12),
+        Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen)), child: Column(children: [
+          Text("LAST TICKET: ${lastSale!['ticket_id']} | Seat ${lastSale!['seat']} | GHS ${(lastSale!['fare'] as double).toStringAsFixed(2)} | ${lastSale!['name']}", style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+          const SizedBox(height: 8),
+          ElevatedButton(onPressed: () => doPrint(lastSale!), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(14)), child: const Text("🖨️ PRINT THIS TICKET")),
+        ])),
+      ],
       const Divider(),
       const Text("2. Update fare"),
       TextField(controller: fareC, decoration: const InputDecoration(labelText: "New fare"), keyboardType: TextInputType.number),
@@ -410,7 +433,7 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
       ElevatedButton(onPressed: () async { final r1 = await exportSalesToExcel(todayOnly: true); final r2 = await exportSalesToExcel(todayOnly: false); setState(() => info = "$r1\n$r2"); }, child: const Text("7. Export Sales to Excel/CSV")),
       ElevatedButton(onPressed: () async { final db = await AppDB.getDB(); await db.delete('seats'); setState(() => info = "Reset done"); }, child: const Text("8. Reset seats")),
       ElevatedButton(onPressed: () { currentUser = null; Navigator.pop(context); }, child: const Text("9. Logout")),
-      const SizedBox(height: 16), Text(info),
+      const SizedBox(height: 16), Text(info, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
     ])));
   }
 }
