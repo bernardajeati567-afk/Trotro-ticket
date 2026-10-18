@@ -1,24 +1,50 @@
-name: Build APK
+name: Build Trotro APK
+
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: 'stable'
-      - run: flutter pub get
-      - run: flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android .
-      - run: flutter pub get
-      - run: dart pub add flutter_launcher_icons
-      - run: flutter pub run flutter_launcher_icons:generate
-      - run: flutter build apk --release
-      - uses: actions/upload-artifact@v4
+
+      - name: Check icon file exists
+        run: |
+          ls -l assets/
+          echo "--- CHECKING ICON ---"
+          ls -lh assets/icon.png
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Generate App Icon - THIS IS THE FIX
+        run: dart run flutter_launcher_icons
+
+      - name: Verify icon generated
+        run: |
+          ls -l android/app/src/main/res/mipmap-*/ic_launcher.png || echo "Icon not generated"
+
+      - name: Build APK Release
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: app-release
+          name: trotro-app
           path: build/app/outputs/flutter-apk/app-release.apk
