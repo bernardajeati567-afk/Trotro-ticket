@@ -229,30 +229,55 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   }
 }
 
+// ======== PASSENGER - UPDATED: Auto Fare Clear Like Station Master ========
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = "";
+  double? autoFare; String autoRoute = "";
+
+  @override void initState() {
+    super.initState();
+    fromC.addListener(_autoCheck);
+    toC.addListener(_autoCheck);
+  }
+  @override void dispose() { fromC.dispose(); toC.dispose(); super.dispose(); }
+
+  void _autoCheck() {
+    final fs = resolveStation(fromC.text, fromVal);
+    final ts = resolveStation(toC.text, toVal);
+    if (fs.isEmpty || ts.isEmpty) { setState(() { autoFare = null; autoRoute = ""; }); return; }
+    if (routes.containsKey(fs) && routes[fs]!.containsKey(ts)) {
+      setState(() { autoFare = routes[fs]![ts]!; autoRoute = "${titleCase(fs)} -> ${titleCase(ts)}"; result = "FARE: $autoRoute = GHS ${autoFare!.toStringAsFixed(2)}"; });
+    } else { setState(() { autoFare = null; autoRoute = ""; }); }
+  }
+
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(appBar: AppBar(title: const Text("PASSENGER CHECK")), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
       const Text("Select OR Type Station - Both Work", style: TextStyle(fontWeight: FontWeight.bold)),
       const SizedBox(height: 8),
-      DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { fromVal = v; fromC.text = v ?? ""; }); }),
+      DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { fromVal = v; fromC.text = v ?? ""; }); _autoCheck(); }),
       TextField(controller: fromC, decoration: const InputDecoration(labelText: "From - Or Type Here", hintText: "e.g. Cape Coast")),
       const SizedBox(height: 8),
-      DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { toVal = v; toC.text = v ?? ""; }); }),
+      DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { toVal = v; toC.text = v ?? ""; }); _autoCheck(); }),
       TextField(controller: toC, decoration: const InputDecoration(labelText: "To - Or Type Here", hintText: "e.g. Swedru")),
+      const SizedBox(height: 12),
+      // AUTO FARE BOX - Shows by itself like Station Master
+      if (autoFare != null) Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width: 2), borderRadius: BorderRadius.circular(12)), child: Column(children: [
+        Text(autoRoute, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        Text("FARE: GHS ${autoFare!.toStringAsFixed(2)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: ghGreen)),
+        const Text("Safe. Fast. Reliable.", style: TextStyle(fontSize: 12, color: Colors.grey)),
+      ])),
       const SizedBox(height: 12),
       ElevatedButton(onPressed: () {
         final fs = resolveStation(fromC.text, fromVal);
         final ts = resolveStation(toC.text, toVal);
         if (fs.isEmpty || ts.isEmpty) { setState(() => result = "Select or type From and To"); return; }
-        // CHANGE 2 - CHECK FARE WARNING: show fare + warning text
         if (routes.containsKey(fs) && routes[fs]!.containsKey(ts)) { setState(() => result = "FARE: ${titleCase(fs)} -> ${titleCase(ts)} = GHS ${routes[fs]![ts]!.toStringAsFixed(2)}"); } else { setState(() => result = "No route from $fs to $ts"); }
       }, child: const Text("CHECK FARE")),
       const SizedBox(height: 16),
       Text(result, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-      // CHANGE 2 - Warning box only shows when fare is found
       if (result.startsWith("FARE:")) ...[
         const SizedBox(height: 12),
         Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.shade50, border: Border.all(color: ghRed, width: 2), borderRadius: BorderRadius.circular(8)), child: const Text("⚠️ Don't pay any amount except this fare! If driver asks for more, do NOT pay.", textAlign: TextAlign.center, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: ghRed))),
@@ -297,8 +322,12 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         final nu = newU.text.toLowerCase().trim();
         if (nu.contains(" ") || nu.isEmpty || users.containsKey(nu)) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid!"))); return; }
         users[nu] = {"password": hashPassword(newP.text), "station": titleCase(stationC.text.trim()), "role": "station_master", "full_name": titleCase(fullN.text.trim())};
-        await saveUsers(users); setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Created ${users[nu]!['full_name']} | $nu")));
+        await saveUsers(users);
+        // ADMIN AUTO CLEAR - No dropdown, just typing, clear after CREATE
+        final createdName = users[nu]!['full_name'];
+        newU.clear(); fullN.clear(); newP.clear(); stationC.clear();
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Created $createdName | $nu - Form cleared, ready for next")));
       }, child: const Text("CREATE")),
       const Divider(),
       const Text("2. Delete Station Master", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -310,7 +339,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         if (!users.containsKey(du)) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Not found!"))); return; }
         if (du == adminUser || du == "admin") { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Cannot delete self/admin!"))); return; }
         final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: Text("DELETE $du?"), content: const Text("Type YES to confirm"), actions: [TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("YES")), TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("NO"))]));
-        if (confirm == true) { users.remove(du); await saveUsers(users); setState(() {}); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("DELETED $du"))); }
+        if (confirm == true) { users.remove(du); await saveUsers(users); delU.clear(); setState(() {}); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("DELETED $du"))); }
       }, child: const Text("DELETE")),
       const Divider(),
       const Text("3. View Accounts", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -402,7 +431,6 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         final seat = seats.first;
         await saveSeat(seat);
         final sale = await saveSale(nameC.text.trim(), fs, ts, fare, seat);
-        // CHANGE 1 - AUTO CLEAR after SELL TICKET
         setState(() { lastSale = sale; info = "SOLD! ${sale['ticket_id']} | Seat $seat | Fare GHS ${fare.toStringAsFixed(2)}"; nameC.clear(); fromC.clear(); toC.clear(); fromVal = null; toVal = null; });
         if (!context.mounted) return;
         showDialog(context: context, builder: (_) => AlertDialog(title: const Text("✅ TICKET SOLD!"), content: Text("Ticket: ${sale['ticket_id']}\nPassenger: ${sale['name']}\nRoute: ${titleCase(fs)} -> ${titleCase(ts)}\nSeat: $seat\nFare: GHS ${fare.toStringAsFixed(2)} PAID\nDate: ${sale['date']} ${sale['time']}\n\nPDF saved in app folder."), actions: [
@@ -440,7 +468,6 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
           if (np == null || np <= 0) { setState(() => info = "⚠️ Enter valid fare e.g. 20.00"); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter valid fare!"))); return; }
           final oldFare = routes[fs]?[ts];
           routes.putIfAbsent(fs, () => {})[ts] = np; routes.putIfAbsent(ts, () => {})[fs] = np; await saveFares(routes);
-          // CHANGE 1 - AUTO CLEAR after UPDATE FARE
           setState(() { info = "✅ FARE UPDATED! ${titleCase(fs)} <-> ${titleCase(ts)} : GHS ${oldFare?.toStringAsFixed(2) ?? '-'} -> GHS ${np.toStringAsFixed(2)}"; updFromC.clear(); updToC.clear(); updFareC.clear(); updFromVal = null; updToVal = null; });
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("✅ Updated ${titleCase(fs)} -> ${titleCase(ts)} to GHS ${np.toStringAsFixed(2)}")));
         }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(14)), child: const Text("UPDATE FARE")),
