@@ -34,6 +34,17 @@ jobs:
       - name: Install Icon Package
         run: dart pub add flutter_launcher_icons
 
+      - name: Create Icon Config
+        run: |
+          cat > flutter_launcher_icons.yaml <<'EOF'
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/icon.png"
+            min_sdk_android: 21
+          EOF
+          cat flutter_launcher_icons.yaml
+
       - name: Generate App Icon
         run: dart run flutter_launcher_icons
 
