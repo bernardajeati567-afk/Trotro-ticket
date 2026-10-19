@@ -6,36 +6,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: 'stable'
-
       - run: flutter pub get
-
-      - name: Create Android folder
-        run: flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android --overwrite .
-
+      - run: flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android .
       - run: flutter pub get
-
-      - name: Check icon file
-        run: ls -lh assets/icon.png
-
-      - name: Install Icon Package
-        run: dart pub add flutter_launcher_icons
-
-      - name: Create Icon Config
-        run: |
+      - run: dart pub add flutter_launcher_icons
+      - run: |
           cat > flutter_launcher_icons.yaml <<'EOF'
           flutter_launcher_icons:
             android: true
@@ -43,14 +24,8 @@ jobs:
             image_path: "assets/icon.png"
             min_sdk_android: 21
           EOF
-          cat flutter_launcher_icons.yaml
-
-      - name: Generate App Icon
-        run: dart run flutter_launcher_icons
-
-      - name: Build APK
-        run: flutter build apk --release
-
+      - run: dart run flutter_launcher_icons
+      - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
           name: app-release
