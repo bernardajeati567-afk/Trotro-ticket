@@ -19,6 +19,19 @@ const Color ghRed = Color(0xFFCE1126);
 const Color ghGold = Color(0xFFFCD116);
 const Color ghGreen = Color(0xFF006B3F);
 
+// ============ DEFAULT ACCOUNTS - BAKED IN CODE - WORKS ON ALL DEVICES ============
+// These accounts are inside the app. Every fresh install / Xender share / Play Store download will have them.
+// Do NOT delete this list. If you want a new master to work everywhere, add it here and rebuild.
+const List<Map<String, String>> defaultAccounts = [
+  {'username': 'admin', 'password': 'Ad1My', 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'},
+  {'username': 'capecoast', 'password': 'cape123', 'station': 'Cape Coast', 'role': 'station_master', 'full_name': 'Cape Coast Master'},
+  {'username': 'swedru', 'password': 'swedru123', 'station': 'Swedru', 'role': 'station_master', 'full_name': 'Swedru Master'},
+  {'username': 'accra', 'password': 'accra123', 'station': 'Accra', 'role': 'station_master', 'full_name': 'Accra Master'},
+  {'username': 'kumasi', 'password': 'kumasi123', 'station': 'Kumasi', 'role': 'station_master', 'full_name': 'Kumasi Master'},
+  {'username': 'tamale', 'password': 'tamale123', 'station': 'Tamale', 'role': 'station_master', 'full_name': 'Tamale Master'},
+  {'username': 'master', 'password': 'master123', 'station': 'All Stations', 'role': 'station_master', 'full_name': 'General Master'},
+];
+
 // ============ PASSWORD ============
 String hashPassword(String p) {
   final salt = Random.secure().toString() + DateTime.now().millisecondsSinceEpoch.toString();
@@ -47,7 +60,12 @@ class AppDB {
   static Future<Database> getDB() async {
     if (_db != null) return _db!;
     final dbPath = await getDatabasesPath();
-    _db = await openDatabase(path.join(dbPath, dbFile), version: 1, onCreate: (db, v) async {
+    _db = await openDatabase(path.join(dbPath, dbFile), version: 2, onCreate: (db, v) async {
+      await db.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY,password TEXT,station TEXT,role TEXT,full_name TEXT)');
+      await db.execute('CREATE TABLE IF NOT EXISTS fares (from_s TEXT,to_s TEXT,fare REAL,PRIMARY KEY (from_s,to_s))');
+      await db.execute('CREATE TABLE IF NOT EXISTS seats (seat TEXT PRIMARY KEY)');
+      await db.execute('CREATE TABLE IF NOT EXISTS sales (ticket_id TEXT PRIMARY KEY,date TEXT,time TEXT,name TEXT,from_s TEXT,to_s TEXT,fare REAL,seat TEXT,sold_by TEXT)');
+    }, onUpgrade: (db, oldV, newV) async {
       await db.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY,password TEXT,station TEXT,role TEXT,full_name TEXT)');
       await db.execute('CREATE TABLE IF NOT EXISTS fares (from_s TEXT,to_s TEXT,fare REAL,PRIMARY KEY (from_s,to_s))');
       await db.execute('CREATE TABLE IF NOT EXISTS seats (seat TEXT PRIMARY KEY)');
@@ -56,12 +74,26 @@ class AppDB {
     return _db!;
   }
 }
+
+Future<void> ensureDefaultUsers(Database db) async {
+  for (var acc in defaultAccounts) {
+    final cnt = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM users WHERE username=?", [acc['username']])) ?? 0;
+    if (cnt == 0) {
+      await db.insert('users', {
+        'username': acc['username'],
+        'password': hashPassword(acc['password']!),
+        'station': acc['station'],
+        'role': acc['role'],
+        'full_name': acc['full_name'],
+      });
+    }
+  }
+}
+
 Future<void> initDB() async {
   final db = await AppDB.getDB();
-  final count = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM users WHERE username='admin'")) ?? 0;
-  if (count == 0) {
-    await db.insert('users', {'username': 'admin', 'password': hashPassword("Ad1My"), 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'});
-  }
+  // FIXED: Always ensure default accounts exist on every device, every launch
+  await ensureDefaultUsers(db);
   final dir = await getApplicationDocumentsDirectory();
   final f = File(path.join(dir.path, fareFile));
   if (await f.exists()) {
@@ -81,14 +113,27 @@ Future<void> initDB() async {
 }
 Future<Map<String, Map<String, dynamic>>> loadUsers() async {
   final db = await AppDB.getDB();
+  // Ensure defaults are in DB before loading
+  await ensureDefaultUsers(db);
   final rows = await db.query('users');
   final Map<String, Map<String, dynamic>> users = {};
   for (var r in rows) { users[r['username'] as String] = {'password': r['password'], 'station': r['station'], 'role': r['role'], 'full_name': r['full_name']}; }
-  if (users.isEmpty) { return {"admin": {"password": hashPassword("Ad1My"), "station": "Head Office", "role": "admin", "full_name": "System Admin"}}; }
+  // Safety: If still empty, add defaults in memory
+  if (users.isEmpty) {
+    for (var acc in defaultAccounts) {
+      users[acc['username']!] = {"password": hashPassword(acc['password']!), "station": acc['station'], "role": acc['role'], "full_name": acc['full_name']};
+    }
+  }
   return users;
 }
 Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
   final db = await AppDB.getDB();
+  // PROTECT: Never delete default accounts from map - if they were removed, restore them
+  for (var acc in defaultAccounts) {
+    if (!users.containsKey(acc['username'])) {
+      users[acc['username']!] = {"password": hashPassword(acc['password']!), "station": acc['station'], "role": acc['role'], "full_name": acc['full_name']};
+    }
+  }
   await db.delete('users');
   for (var u in users.keys) { final d = users[u]!; await db.insert('users', {'username': u, 'password': d['password'], 'station': d['station'], 'role': d['role'], 'full_name': d['full_name']}); }
 }
@@ -229,19 +274,16 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   }
 }
 
-// ======== PASSENGER - UPDATED: Auto Fare Clear Like Station Master ========
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = "";
   double? autoFare; String autoRoute = "";
-
   @override void initState() {
     super.initState();
     fromC.addListener(_autoCheck);
     toC.addListener(_autoCheck);
   }
   @override void dispose() { fromC.dispose(); toC.dispose(); super.dispose(); }
-
   void _autoCheck() {
     final fs = resolveStation(fromC.text, fromVal);
     final ts = resolveStation(toC.text, toVal);
@@ -250,7 +292,6 @@ class _PassengerScreenState extends State<PassengerScreen> {
       setState(() { autoFare = routes[fs]![ts]!; autoRoute = "${titleCase(fs)} -> ${titleCase(ts)}"; result = "FARE: $autoRoute = GHS ${autoFare!.toStringAsFixed(2)}"; });
     } else { setState(() { autoFare = null; autoRoute = ""; }); }
   }
-
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(appBar: AppBar(title: const Text("PASSENGER CHECK")), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
@@ -262,7 +303,6 @@ class _PassengerScreenState extends State<PassengerScreen> {
       DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { toVal = v; toC.text = v ?? ""; }); _autoCheck(); }),
       TextField(controller: toC, decoration: const InputDecoration(labelText: "To - Or Type Here", hintText: "e.g. Swedru")),
       const SizedBox(height: 12),
-      // AUTO FARE BOX - Shows by itself like Station Master
       if (autoFare != null) Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width: 2), borderRadius: BorderRadius.circular(12)), child: Column(children: [
         Text(autoRoute, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
@@ -323,7 +363,6 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         if (nu.contains(" ") || nu.isEmpty || users.containsKey(nu)) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid!"))); return; }
         users[nu] = {"password": hashPassword(newP.text), "station": titleCase(stationC.text.trim()), "role": "station_master", "full_name": titleCase(fullN.text.trim())};
         await saveUsers(users);
-        // ADMIN AUTO CLEAR - No dropdown, just typing, clear after CREATE
         final createdName = users[nu]!['full_name'];
         newU.clear(); fullN.clear(); newP.clear(); stationC.clear();
         setState(() {});
@@ -338,6 +377,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         final du = delU.text.toLowerCase().trim();
         if (!users.containsKey(du)) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Not found!"))); return; }
         if (du == adminUser || du == "admin") { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Cannot delete self/admin!"))); return; }
+        if (defaultAccounts.any((a) => a['username'] == du)) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Cannot delete default master - it is in code!"))); return; }
         final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: Text("DELETE $du?"), content: const Text("Type YES to confirm"), actions: [TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("YES")), TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("NO"))]));
         if (confirm == true) { users.remove(du); await saveUsers(users); delU.clear(); setState(() {}); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("DELETED $du"))); }
       }, child: const Text("DELETE")),
@@ -378,6 +418,8 @@ class _LoginScreenState extends State<LoginScreen> {
       TextField(controller: pwC, obscureText: true, decoration: const InputDecoration(labelText: "Password")),
       ElevatedButton(onPressed: () async {
         final un = unC.text.toLowerCase().trim();
+        // FIXED: Reload from DB first to ensure defaults are present, then verify
+        users = await loadUsers();
         if (users.containsKey(un) && verifyPassword(users[un]!['password'], pwC.text.trim())) {
           currentUser = un;
           Navigator.push(context, MaterialPageRoute(builder: (_) => StationMasterScreen(username: un)));
