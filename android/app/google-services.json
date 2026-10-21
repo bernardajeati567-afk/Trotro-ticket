@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "267399612002",
+    "project_id": "trotro-ticket-f148a",
+    "storage_bucket": "trotro-ticket-f148a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:267399612002:android:da35fa75668299e4c2b33b",
+        "android_client_info": {
+          "package_name": "com.trotro.ticket"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA2WOvN7YLqM6hZOtVBfMFa0YnfCdTphR4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
