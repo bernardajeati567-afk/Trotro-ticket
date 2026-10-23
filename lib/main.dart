@@ -76,6 +76,7 @@ class AppDB {
   }
 }
 
+// FIXED - NOW OVERWRITES FROM CLOUD!
 Future<void> ensureDefaultUsers(Database db) async {
   for (var acc in defaultAccounts) {
     final cnt = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM users WHERE username=?", [acc['username']])) ?? 0;
@@ -90,22 +91,16 @@ Future<void> ensureDefaultUsers(Database db) async {
     }
   }
   try {
-    final conn = await Connectivity().checkConnectivity();
-    if (conn != ConnectivityResult.none) {
-      final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 4));
-      for (var doc in snap.docs) {
-        final data = doc.data();
-        final cnt2 = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM users WHERE username=?", [data['username']])) ?? 0;
-        if (cnt2 == 0) {
-          await db.insert('users', {
-            'username': data['username'],
-            'password': data['password'],
-            'station': data['station'],
-            'role': data['role'],
-            'full_name': data['full_name'],
-          });
-        }
-      }
+    final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 5));
+    for (var doc in snap.docs) {
+      final data = doc.data();
+      await db.insert('users', {
+        'username': data['username'],
+        'password': data['password'],
+        'station': data['station'],
+        'role': data['role'],
+        'full_name': data['full_name'],
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
   } catch (_) {}
 }
@@ -153,18 +148,15 @@ Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
   await db.delete('users');
   for (var u in users.keys) { final d = users[u]!; await db.insert('users', {'username': u, 'password': d['password'], 'station': d['station'], 'role': d['role'], 'full_name': d['full_name']}); }
   try {
-    final conn = await Connectivity().checkConnectivity();
-    if (conn != ConnectivityResult.none) {
-      for (var u in users.keys) {
-        if (!defaultAccounts.any((a) => a['username'] == u)) {
-          await FirebaseFirestore.instance.collection('users').doc(u).set({
-            'username': u,
-            'password': users[u]!['password'],
-            'station': users[u]!['station'],
-            'role': users[u]!['role'],
-            'full_name': users[u]!['full_name'],
-          }).timeout(const Duration(seconds: 3));
-        }
+    for (var u in users.keys) {
+      if (!defaultAccounts.any((a) => a['username'] == u)) {
+        await FirebaseFirestore.instance.collection('users').doc(u).set({
+          'username': u,
+          'password': users[u]!['password'],
+          'station': users[u]!['station'],
+          'role': users[u]!['role'],
+          'full_name': users[u]!['full_name'],
+        }).timeout(const Duration(seconds: 4));
       }
     }
   } catch (_) {}
@@ -279,13 +271,12 @@ String resolveStation(String typedText, String? dropVal) {
 late Map<String, Map<String, double>> routes;
 late Map<String, Map<String, dynamic>> users;
 
-// FIXED - FAST OPEN - NO WHITE SCREEN
 Future<void> main() async { 
   WidgetsFlutterBinding.ensureInitialized(); 
   try {
     await Firebase.initializeApp().timeout(const Duration(seconds: 3));
   } catch (e) {
-    debugPrint("Firebase init offline: $e - opening app anyway");
+    debugPrint("Firebase init offline: $e");
   }
   await initDB(); 
   routes = await loadFares(); 
