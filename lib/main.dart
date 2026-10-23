@@ -89,11 +89,10 @@ Future<void> ensureDefaultUsers(Database db) async {
       });
     }
   }
-  // NEW: Try to sync from Firebase if online
   try {
     final conn = await Connectivity().checkConnectivity();
     if (conn != ConnectivityResult.none) {
-      final snap = await FirebaseFirestore.instance.collection('users').get();
+      final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 4));
       for (var doc in snap.docs) {
         final data = doc.data();
         final cnt2 = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM users WHERE username=?", [data['username']])) ?? 0;
@@ -153,7 +152,6 @@ Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
   }
   await db.delete('users');
   for (var u in users.keys) { final d = users[u]!; await db.insert('users', {'username': u, 'password': d['password'], 'station': d['station'], 'role': d['role'], 'full_name': d['full_name']}); }
-  // NEW: Save to Firebase cloud for other devices
   try {
     final conn = await Connectivity().checkConnectivity();
     if (conn != ConnectivityResult.none) {
@@ -165,7 +163,7 @@ Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
             'station': users[u]!['station'],
             'role': users[u]!['role'],
             'full_name': users[u]!['full_name'],
-          });
+          }).timeout(const Duration(seconds: 3));
         }
       }
     }
@@ -280,9 +278,15 @@ String resolveStation(String typedText, String? dropVal) {
 }
 late Map<String, Map<String, double>> routes;
 late Map<String, Map<String, dynamic>> users;
+
+// FIXED - FAST OPEN - NO WHITE SCREEN
 Future<void> main() async { 
   WidgetsFlutterBinding.ensureInitialized(); 
-  await Firebase.initializeApp();
+  try {
+    await Firebase.initializeApp().timeout(const Duration(seconds: 3));
+  } catch (e) {
+    debugPrint("Firebase init offline: $e - opening app anyway");
+  }
   await initDB(); 
   routes = await loadFares(); 
   users = await loadUsers(); 
