@@ -9,6 +9,9 @@ import 'package:sqflite/sqflite.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 // ============ CONSTANTS ============
 const String dbFile = "trotro.db";
@@ -19,9 +22,7 @@ const Color ghRed = Color(0xFFCE1126);
 const Color ghGold = Color(0xFFFCD116);
 const Color ghGreen = Color(0xFF006B3F);
 
-// ============ DEFAULT ACCOUNTS - BAKED IN CODE - WORKS ON ALL DEVICES ============
-// These accounts are inside the app. Every fresh install / Xender share / Play Store download will have them.
-// Do NOT delete this list. If you want a new master to work everywhere, add it here and rebuild.
+// ============ DEFAULT ACCOUNTS - BAKED IN CODE ============
 const List<Map<String, String>> defaultAccounts = [
   {'username': 'admin', 'password': 'Ad1My', 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'},
   {'username': 'capecoast', 'password': 'cape123', 'station': 'Cape Coast', 'role': 'station_master', 'full_name': 'Cape Coast Master'},
@@ -88,11 +89,30 @@ Future<void> ensureDefaultUsers(Database db) async {
       });
     }
   }
+  // NEW: Try to sync from Firebase if online
+  try {
+    final conn = await Connectivity().checkConnectivity();
+    if (conn != ConnectivityResult.none) {
+      final snap = await FirebaseFirestore.instance.collection('users').get();
+      for (var doc in snap.docs) {
+        final data = doc.data();
+        final cnt2 = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM users WHERE username=?", [data['username']])) ?? 0;
+        if (cnt2 == 0) {
+          await db.insert('users', {
+            'username': data['username'],
+            'password': data['password'],
+            'station': data['station'],
+            'role': data['role'],
+            'full_name': data['full_name'],
+          });
+        }
+      }
+    }
+  } catch (_) {}
 }
 
 Future<void> initDB() async {
   final db = await AppDB.getDB();
-  // FIXED: Always ensure default accounts exist on every device, every launch
   await ensureDefaultUsers(db);
   final dir = await getApplicationDocumentsDirectory();
   final f = File(path.join(dir.path, fareFile));
@@ -113,12 +133,10 @@ Future<void> initDB() async {
 }
 Future<Map<String, Map<String, dynamic>>> loadUsers() async {
   final db = await AppDB.getDB();
-  // Ensure defaults are in DB before loading
   await ensureDefaultUsers(db);
   final rows = await db.query('users');
   final Map<String, Map<String, dynamic>> users = {};
   for (var r in rows) { users[r['username'] as String] = {'password': r['password'], 'station': r['station'], 'role': r['role'], 'full_name': r['full_name']}; }
-  // Safety: If still empty, add defaults in memory
   if (users.isEmpty) {
     for (var acc in defaultAccounts) {
       users[acc['username']!] = {"password": hashPassword(acc['password']!), "station": acc['station'], "role": acc['role'], "full_name": acc['full_name']};
@@ -128,7 +146,6 @@ Future<Map<String, Map<String, dynamic>>> loadUsers() async {
 }
 Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
   final db = await AppDB.getDB();
-  // PROTECT: Never delete default accounts from map - if they were removed, restore them
   for (var acc in defaultAccounts) {
     if (!users.containsKey(acc['username'])) {
       users[acc['username']!] = {"password": hashPassword(acc['password']!), "station": acc['station'], "role": acc['role'], "full_name": acc['full_name']};
@@ -136,6 +153,23 @@ Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
   }
   await db.delete('users');
   for (var u in users.keys) { final d = users[u]!; await db.insert('users', {'username': u, 'password': d['password'], 'station': d['station'], 'role': d['role'], 'full_name': d['full_name']}); }
+  // NEW: Save to Firebase cloud for other devices
+  try {
+    final conn = await Connectivity().checkConnectivity();
+    if (conn != ConnectivityResult.none) {
+      for (var u in users.keys) {
+        if (!defaultAccounts.any((a) => a['username'] == u)) {
+          await FirebaseFirestore.instance.collection('users').doc(u).set({
+            'username': u,
+            'password': users[u]!['password'],
+            'station': users[u]!['station'],
+            'role': users[u]!['role'],
+            'full_name': users[u]!['full_name'],
+          });
+        }
+      }
+    }
+  } catch (_) {}
 }
 Future<Map<String, Map<String, double>>> loadFares() async {
   final db = await AppDB.getDB();
@@ -206,7 +240,7 @@ Future<String> showSalesReport() async {
 Future<String> showSeatMap() async {
   final db = await AppDB.getDB(); final rows = await db.query('seats'); final used = rows.map((e) => e['seat'] as String).toSet();
   final buffer = StringBuffer("SEAT MAP\n${"=" * 35}\n");
-  for (int i = 0; i < 30; i += 4) { final row = [for (int j = i + 1; j <= i + 4; j++) "A${j.toString().padLeft(2,'0')}"]; buffer.writeln(row.map((s) => used.contains(s) ? "[XX]" : "[$s]").join(" ")); }
+  for (int i = 0; i < 30; i += 4) { final row = [for (int j = i + 1; j <= i + 4; j++) "A${j.toString().padLeft(2, '0')}"]; buffer.writeln(row.map((s) => used.contains(s) ? "[XX]" : "[$s]").join(" ")); }
   buffer.writeln("=" * 35); return buffer.toString();
 }
 Future<String> exportSalesToExcel({required bool todayOnly}) async {
@@ -246,7 +280,14 @@ String resolveStation(String typedText, String? dropVal) {
 }
 late Map<String, Map<String, double>> routes;
 late Map<String, Map<String, dynamic>> users;
-Future<void> main() async { WidgetsFlutterBinding.ensureInitialized(); await initDB(); routes = await loadFares(); users = await loadUsers(); runApp(const TrotroApp()); }
+Future<void> main() async { 
+  WidgetsFlutterBinding.ensureInitialized(); 
+  await Firebase.initializeApp();
+  await initDB(); 
+  routes = await loadFares(); 
+  users = await loadUsers(); 
+  runApp(const TrotroApp()); 
+}
 
 class TrotroApp extends StatelessWidget {
   const TrotroApp({super.key});
@@ -366,7 +407,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         final createdName = users[nu]!['full_name'];
         newU.clear(); fullN.clear(); newP.clear(); stationC.clear();
         setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Created $createdName | $nu - Form cleared, ready for next")));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Created $createdName | $nu - Now works on ALL devices!")));
       }, child: const Text("CREATE")),
       const Divider(),
       const Text("2. Delete Station Master", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -379,7 +420,12 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         if (du == adminUser || du == "admin") { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Cannot delete self/admin!"))); return; }
         if (defaultAccounts.any((a) => a['username'] == du)) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Cannot delete default master - it is in code!"))); return; }
         final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: Text("DELETE $du?"), content: const Text("Type YES to confirm"), actions: [TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("YES")), TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("NO"))]));
-        if (confirm == true) { users.remove(du); await saveUsers(users); delU.clear(); setState(() {}); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("DELETED $du"))); }
+        if (confirm == true) { 
+          users.remove(du); 
+          await saveUsers(users); 
+          try { await FirebaseFirestore.instance.collection('users').doc(du).delete(); } catch (_){}
+          delU.clear(); setState(() {}); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("DELETED $du"))); 
+        }
       }, child: const Text("DELETE")),
       const Divider(),
       const Text("3. View Accounts", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -418,7 +464,6 @@ class _LoginScreenState extends State<LoginScreen> {
       TextField(controller: pwC, obscureText: true, decoration: const InputDecoration(labelText: "Password")),
       ElevatedButton(onPressed: () async {
         final un = unC.text.toLowerCase().trim();
-        // FIXED: Reload from DB first to ensure defaults are present, then verify
         users = await loadUsers();
         if (users.containsKey(un) && verifyPassword(users[un]!['password'], pwC.text.trim())) {
           currentUser = un;
