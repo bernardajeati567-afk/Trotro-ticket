@@ -20,7 +20,7 @@ const Color ghRed = Color(0xFFCE1126);
 const Color ghGold = Color(0xFFFCD116);
 const Color ghGreen = Color(0xFF006B3F);
 
-// ONLY ADMIN IS HARD-CODED! NO MORE STATION MASTERS IN CODE! PROFESSIONAL!
+// FIXED: ONLY ADMIN HARD-CODED - NO MORE 7 ACCOUNTS BUG!
 const List<Map<String, String>> defaultAccounts = [
   {'username': 'admin', 'password': 'Ad1My', 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'},
 ];
@@ -57,13 +57,13 @@ class AppDB {
       await db.execute('CREATE TABLE IF NOT EXISTS seats (seat TEXT PRIMARY KEY)');
       await db.execute('CREATE TABLE IF NOT EXISTS sales (ticket_id TEXT PRIMARY KEY,date TEXT,time TEXT,name TEXT,from_s TEXT,to_s TEXT,fare REAL,seat TEXT,sold_by TEXT)');
     }, onUpgrade: (db, oldV, newV) async {
+      // FIXED: DELETE OLD HARD-CODED ACCOUNTS ON UPGRADE!
       if (oldV < 3) {
-        // DELETE OLD HARD-CODED ACCOUNTS!
-        await db.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY,password TEXT,station TEXT,role TEXT,full_name TEXT)');
         for (var old in ['capecoast','swedru','accra','kumasi','tamale','master']) {
           await db.delete('users', where: 'username=?', whereArgs: [old]);
         }
       }
+      await db.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY,password TEXT,station TEXT,role TEXT,full_name TEXT)');
       await db.execute('CREATE TABLE IF NOT EXISTS fares (from_s TEXT,to_s TEXT,fare REAL,PRIMARY KEY (from_s,to_s))');
       await db.execute('CREATE TABLE IF NOT EXISTS seats (seat TEXT PRIMARY KEY)');
       await db.execute('CREATE TABLE IF NOT EXISTS sales (ticket_id TEXT PRIMARY KEY,date TEXT,time TEXT,name TEXT,from_s TEXT,to_s TEXT,fare REAL,seat TEXT,sold_by TEXT)');
@@ -72,14 +72,16 @@ class AppDB {
   }
 }
 
+// FIXED: 2-WAY SYNC - UPLOAD + DOWNLOAD!
 Future<String> syncUsersFromCloud() async {
   try {
     final db = await AppDB.getDB();
-    // UPLOAD local to cloud
+    // 1. UPLOAD local new accounts to cloud (fixes offline creation!)
     final localRows = await db.query('users');
+    int uploaded = 0;
     for (var r in localRows) {
       final uname = r['username'] as String;
-      if (!defaultAccounts.any((a) => a['username'] == uname)) {
+      if (uname != 'admin') {
         try {
           await FirebaseFirestore.instance.collection('users').doc(uname).set({
             'username': r['username'],
@@ -87,11 +89,12 @@ Future<String> syncUsersFromCloud() async {
             'station': r['station'],
             'role': r['role'],
             'full_name': r['full_name'],
-          }, SetOptions(merge: true)).timeout(Duration(seconds: 4));
+          }, SetOptions(merge: true)).timeout(Duration(seconds: 5));
+          uploaded++;
         } catch (_) {}
       }
     }
-    // DOWNLOAD cloud to local
+    // 2. DOWNLOAD cloud to local
     final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 6));
     for (var doc in snap.docs) {
       final data = doc.data();
@@ -104,9 +107,9 @@ Future<String> syncUsersFromCloud() async {
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     final total = (await db.query('users')).length;
-    return "✅ Cloud: ${snap.docs.length} | Device: $total accounts";
+    return "✅ Synced! Cloud: ${snap.docs.length} | Device: $total | Uploaded: $uploaded";
   } catch (e) {
-    return "Offline - Using local accounts";
+    return "Offline - Using local. Error: $e";
   }
 }
 
@@ -178,7 +181,7 @@ Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
   }
   try {
     for (var u in users.keys) {
-      if (!defaultAccounts.any((a) => a['username'] == u)) {
+      if (u != 'admin') {
         FirebaseFirestore.instance.collection('users').doc(u).set({
           'username': u,
           'password': users[u]!['password'],
@@ -329,7 +332,6 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
           ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginScreen())), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("2. Station Master Login")),
           ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateAccountScreen())), style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black), child: const Text("3. Admin - Manage Accounts")),
           ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VerifyScreen())), child: const Text("4. Verify Ticket")),
-          ElevatedButton(onPressed: () => Navigator.pop(context), child: const Text("5. Exit")),
         ]))),
       ]));
   }
@@ -352,22 +354,16 @@ class _PassengerScreenState extends State<PassengerScreen> {
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(appBar: AppBar(title: const Text("PASSENGER CHECK")), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
-      const Text("Select OR Type Station - Both Work", style: TextStyle(fontWeight: FontWeight.bold)),
-      const SizedBox(height: 8),
       DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { fromVal = v; fromC.text = v ?? ""; }); _autoCheck(); }),
-      TextField(controller: fromC, decoration: const InputDecoration(labelText: "From - Or Type Here")),
+      TextField(controller: fromC, decoration: const InputDecoration(labelText: "From - Or Type")),
       const SizedBox(height: 8),
       DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { toVal = v; toC.text = v ?? ""; }); _autoCheck(); }),
-      TextField(controller: toC, decoration: const InputDecoration(labelText: "To - Or Type Here")),
+      TextField(controller: toC, decoration: const InputDecoration(labelText: "To - Or Type")),
       const SizedBox(height: 12),
-      if (autoFare != null) Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width: 2), borderRadius: BorderRadius.circular(12)), child: Column(children: [
-        Text(autoRoute, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("FARE: GHS ${autoFare!.toStringAsFixed(2)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: ghGreen)),
-      ])),
+      if (autoFare != null) Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width: 2), borderRadius: BorderRadius.circular(12)), child: Column(children: [Text(autoRoute, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), Text("FARE: GHS ${autoFare!.toStringAsFixed(2)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: ghGreen))])),
       const SizedBox(height: 12),
       ElevatedButton(onPressed: () {
-        final fs = resolveStation(fromC.text, fromVal);
-        final ts = resolveStation(toC.text, toVal);
+        final fs = resolveStation(fromC.text, fromVal); final ts = resolveStation(toC.text, toVal);
         if (fs.isEmpty || ts.isEmpty) { setState(() => result = "Select From and To"); return; }
         if (routes.containsKey(fs) && routes[fs]!.containsKey(ts)) { setState(() => result = "FARE: ${titleCase(fs)} -> ${titleCase(ts)} = GHS ${routes[fs]![ts]!.toStringAsFixed(2)}"); } else { setState(() => result = "No route"); }
       }, child: const Text("CHECK FARE")),
@@ -394,15 +390,13 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         ElevatedButton(onPressed: () {
           final un = adminU.text.toLowerCase().trim();
           final pw = adminP.text.trim();
-          if (users.containsKey(un) && verifyPassword(users[un]!['password'], pw) && users[un]!['role'] == 'admin') {
-            setState(() => adminUser = un);
-          } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Auth failed!"))); }
+          if (users.containsKey(un) && verifyPassword(users[un]!['password'], pw) && users[un]!['role'] == 'admin') { setState(() => adminUser = un); } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Auth failed!"))); }
         }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("VERIFY ADMIN")),
       ])));
     }
-    return Scaffold(appBar: AppBar(title: Text("ADMIN - Manage Accounts ($adminUser)"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Text("Create New Station Master", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-      TextField(controller: newU, decoration: const InputDecoration(labelText: "Username (one word, e.g. cape2)")),
+      TextField(controller: newU, decoration: const InputDecoration(labelText: "Username e.g. cape2")),
       TextField(controller: fullN, decoration: const InputDecoration(labelText: "Full Name")),
       TextField(controller: newP, decoration: const InputDecoration(labelText: "Password")),
       TextField(controller: stationC, decoration: const InputDecoration(labelText: "Station")),
@@ -413,20 +407,19 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         users[nu] = {"password": hashPassword(newP.text), "station": titleCase(stationC.text.trim()), "role": "station_master", "full_name": titleCase(fullN.text.trim())};
         setState(() => cloudMsg = "Uploading to cloud...");
         await saveUsers(users);
-        await syncUsersFromCloud();
-        setState(() => cloudMsg = "✅ $nu created and in cloud!");
+        final msg = await syncUsersFromCloud();
+        setState(() => cloudMsg = "✅ $nu created! $msg");
         newU.clear(); fullN.clear(); newP.clear(); stationC.clear(); setState(() {});
       }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("CREATE ACCOUNT")),
       Text(cloudMsg, style: const TextStyle(fontWeight: FontWeight.bold, color: ghGreen)),
       const Divider(height: 32),
-      const Text("All Accounts - Professional View", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+      const Text("All Accounts - Professional", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
       const SizedBox(height: 8),
-      // PROFESSIONAL TABLE - NOT RAW TEXT!
       Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: const [
         DataColumn(label: Text("Username", style: TextStyle(fontWeight: FontWeight.bold))),
         DataColumn(label: Text("Full Name", style: TextStyle(fontWeight: FontWeight.bold))),
         DataColumn(label: Text("Station", style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text("Action", style: TextStyle(fontWeight: FontWeight.bold))),
+        DataColumn(label: Text("Delete", style: TextStyle(fontWeight: FontWeight.bold))),
       ], rows: users.entries.map((e) {
         final isAdmin = e.value['role'] == 'admin';
         return DataRow(cells: [
@@ -434,8 +427,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           DataCell(Text(e.value['full_name'])),
           DataCell(Text(e.value['station'])),
           DataCell(isAdmin ? const Icon(Icons.lock, color: Colors.grey) : IconButton(icon: const Icon(Icons.delete, color: ghRed), onPressed: () async {
-            if (e.key == adminUser) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Cannot delete self!"))); return; }
-            final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: Text("Delete ${e.key}?"), content: Text("Delete ${e.value['full_name']}?"), actions: [TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("YES")), TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("NO"))]));
+            final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: Text("Delete ${e.key}?"), actions: [TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("YES")), TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("NO"))]));
             if (confirm == true) {
               users.remove(e.key);
               final db = await AppDB.getDB();
@@ -478,7 +470,7 @@ class _LoginScreenState extends State<LoginScreen> {
   int cloudCount = 0;
   @override void initState() { super.initState(); _doSync(); }
   Future<void> _doSync() async {
-    setState(() => syncStatus = "Syncing accounts from cloud...");
+    setState(() => syncStatus = "Syncing...");
     final msg = await syncUsersFromCloud();
     users = await loadUsers();
     setState(() { syncStatus = msg; cloudCount = users.length; });
@@ -489,13 +481,11 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Padding(padding: const EdgeInsets.all(16), child: SingleChildScrollView(child: Column(children: [
         Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: syncStatus.contains("✅") ? Colors.green.shade50 : Colors.orange.shade50, border: Border.all(color: syncStatus.contains("✅") ? ghGreen : ghGold, width: 2), borderRadius: BorderRadius.circular(8)), child: Column(children: [
           Text(syncStatus, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-          Text("$cloudCount accounts on this device", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          Text("$cloudCount accounts on device", style: const TextStyle(fontSize: 12, color: Colors.grey)),
         ])),
         const SizedBox(height: 12),
         ElevatedButton.icon(onPressed: _doSync, icon: const Icon(Icons.cloud_sync), label: const Text("SYNC FROM CLOUD"), style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(14))),
         const Divider(height: 24),
-        const Text("Secure Login - Your Own Device", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        const SizedBox(height: 12),
         TextField(controller: unC, decoration: const InputDecoration(labelText: "Username", border: OutlineInputBorder(), prefixIcon: Icon(Icons.person))),
         const SizedBox(height: 12),
         TextField(controller: pwC, obscureText: true, decoration: const InputDecoration(labelText: "Password", border: OutlineInputBorder(), prefixIcon: Icon(Icons.lock))),
@@ -508,8 +498,6 @@ class _LoginScreenState extends State<LoginScreen> {
             Navigator.push(context, MaterialPageRoute(builder: (_) => StationMasterScreen(username: un)));
           } else { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Wrong! Have $cloudCount accounts - Tap SYNC"))); }
         }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)), child: const Text("LOGIN"))),
-        const SizedBox(height: 20),
-        Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)), child: const Text("How it works:\n\n1. Admin creates account in Head Office (needs internet)\n2. Admin tells you username & password via phone\n3. Turn on data, tap SYNC FROM CLOUD\n4. Login\n5. After first login, work offline\n\nSafe. Fast. Reliable. Government Approved!", style: TextStyle(fontSize: 12))),
       ]))),
     );
   }
