@@ -11,7 +11,6 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 
 // ============ CONSTANTS ============
 const String dbFile = "trotro.db";
@@ -76,19 +75,18 @@ class AppDB {
   }
 }
 
-// FIXED - NOW OVERWRITES FROM CLOUD!
+// ============ FIXED - NO DELETE BUG! WORKS OFFLINE WITH XENDER! ============
 Future<void> ensureDefaultUsers(Database db) async {
   for (var acc in defaultAccounts) {
-    final cnt = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM users WHERE username=?", [acc['username']])) ?? 0;
-    if (cnt == 0) {
+    try {
       await db.insert('users', {
         'username': acc['username'],
         'password': hashPassword(acc['password']!),
         'station': acc['station'],
         'role': acc['role'],
         'full_name': acc['full_name'],
-      });
-    }
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    } catch (_) {}
   }
   try {
     final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 5));
@@ -138,25 +136,29 @@ Future<Map<String, Map<String, dynamic>>> loadUsers() async {
   }
   return users;
 }
+
+// ============ FIXED - NO DELETE! SAFE FOR XENDER! ============
 Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
   final db = await AppDB.getDB();
-  for (var acc in defaultAccounts) {
-    if (!users.containsKey(acc['username'])) {
-      users[acc['username']!] = {"password": hashPassword(acc['password']!), "station": acc['station'], "role": acc['role'], "full_name": acc['full_name']};
-    }
+  for (var u in users.keys) {
+    await db.insert('users', {
+      'username': u,
+      'password': users[u]!['password'],
+      'station': users[u]!['station'],
+      'role': users[u]!['role'],
+      'full_name': users[u]!['full_name']
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
-  await db.delete('users');
-  for (var u in users.keys) { final d = users[u]!; await db.insert('users', {'username': u, 'password': d['password'], 'station': d['station'], 'role': d['role'], 'full_name': d['full_name']}); }
   try {
     for (var u in users.keys) {
       if (!defaultAccounts.any((a) => a['username'] == u)) {
-        await FirebaseFirestore.instance.collection('users').doc(u).set({
+        FirebaseFirestore.instance.collection('users').doc(u).set({
           'username': u,
           'password': users[u]!['password'],
           'station': users[u]!['station'],
           'role': users[u]!['role'],
           'full_name': users[u]!['full_name'],
-        }).timeout(const Duration(seconds: 4));
+        });
       }
     }
   } catch (_) {}
@@ -294,7 +296,7 @@ class TrotroApp extends StatelessWidget {
 class MainMenuScreen extends StatefulWidget { const MainMenuScreen({super.key}); @override State<MainMenuScreen> createState() => _MainMenuScreenState(); }
 class _MainMenuScreenState extends State<MainMenuScreen> {
   @override Widget build(BuildContext context) {
-    return Scaffold(appBar: AppBar(title: const Text("REAL ME TROTRO v12"), backgroundColor: ghRed, foregroundColor: Colors.white),
+    return Scaffold(appBar: AppBar(title: const Text("REAL ME TROTRO v13 FIXED XENDER"), backgroundColor: ghRed, foregroundColor: Colors.white),
       body: Column(children: [
         Container(width: double.infinity, color: ghRed, padding: const EdgeInsets.all(16), child: Column(children: [const Text("🇬🇭 REAL ME TROTRO", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)), Text(appSlogan, style: const TextStyle(color: Colors.white)), const SizedBox(height: 8), Container(height: 6, color: ghGold), Container(height: 6, color: ghGreen)])),
         Expanded(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -417,7 +419,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: Text("DELETE $du?"), content: const Text("Type YES to confirm"), actions: [TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("YES")), TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("NO"))]));
         if (confirm == true) { 
           users.remove(du); 
-          await saveUsers(users); 
+          final db = await AppDB.getDB();
+          await db.delete('users', where: 'username=?', whereArgs: [du]);
           try { await FirebaseFirestore.instance.collection('users').doc(du).delete(); } catch (_){}
           delU.clear(); setState(() {}); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("DELETED $du"))); 
         }
