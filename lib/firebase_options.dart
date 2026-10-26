@@ -1,5 +1,4 @@
 import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
@@ -7,9 +6,9 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyB_example_replace_me',
-    appId: '1:000000000:android:000000000000000',
-    messagingSenderId: '000000000',
+    apiKey: 'AIzaSyA2WOvN7YLqM6hZOtVBfMFa0YnfCdTphR4',
+    appId: '1:267399612002:android:da35fa75668299e4c2b33b',
+    messagingSenderId: '267399612002',
     projectId: 'trotro-ticket-f148a',
     storageBucket: 'trotro-ticket-f148a.firebasestorage.app',
   );
