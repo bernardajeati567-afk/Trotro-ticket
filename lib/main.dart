@@ -11,6 +11,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
 
 const String dbFile = "trotro.db";
 const String fareFile = "fares.json";
@@ -20,7 +21,6 @@ const Color ghRed = Color(0xFFCE1126);
 const Color ghGold = Color(0xFFFCD116);
 const Color ghGreen = Color(0xFF006B3F);
 
-// FIXED: ONLY ADMIN HARD-CODED - NO MORE 7 ACCOUNTS BUG!
 const List<Map<String, String>> defaultAccounts = [
   {'username': 'admin', 'password': 'Ad1My', 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'},
 ];
@@ -57,7 +57,6 @@ class AppDB {
       await db.execute('CREATE TABLE IF NOT EXISTS seats (seat TEXT PRIMARY KEY)');
       await db.execute('CREATE TABLE IF NOT EXISTS sales (ticket_id TEXT PRIMARY KEY,date TEXT,time TEXT,name TEXT,from_s TEXT,to_s TEXT,fare REAL,seat TEXT,sold_by TEXT)');
     }, onUpgrade: (db, oldV, newV) async {
-      // FIXED: DELETE OLD HARD-CODED ACCOUNTS ON UPGRADE!
       if (oldV < 3) {
         for (var old in ['capecoast','swedru','accra','kumasi','tamale','master']) {
           await db.delete('users', where: 'username=?', whereArgs: [old]);
@@ -72,11 +71,12 @@ class AppDB {
   }
 }
 
-// FIXED: 2-WAY SYNC - UPLOAD + DOWNLOAD!
+bool isFirebaseReady = false;
+
 Future<String> syncUsersFromCloud() async {
+  if (!isFirebaseReady) return "Firebase OFF - Using local. Check firebase_options.dart real keys";
   try {
     final db = await AppDB.getDB();
-    // 1. UPLOAD local new accounts to cloud (fixes offline creation!)
     final localRows = await db.query('users');
     int uploaded = 0;
     for (var r in localRows) {
@@ -94,7 +94,6 @@ Future<String> syncUsersFromCloud() async {
         } catch (_) {}
       }
     }
-    // 2. DOWNLOAD cloud to local
     final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 6));
     for (var doc in snap.docs) {
       final data = doc.data();
@@ -109,7 +108,7 @@ Future<String> syncUsersFromCloud() async {
     final total = (await db.query('users')).length;
     return "✅ Synced! Cloud: ${snap.docs.length} | Device: $total | Uploaded: $uploaded";
   } catch (e) {
-    return "Offline - Using local. Error: $e";
+    return "Offline - $e";
   }
 }
 
@@ -125,19 +124,21 @@ Future<void> ensureDefaultUsers(Database db) async {
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     } catch (_) {}
   }
-  try {
-    final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 4));
-    for (var doc in snap.docs) {
-      final data = doc.data();
-      await db.insert('users', {
-        'username': data['username'],
-        'password': data['password'],
-        'station': data['station'],
-        'role': data['role'],
-        'full_name': data['full_name'],
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-    }
-  } catch (_) {}
+  if (isFirebaseReady) {
+    try {
+      final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 4));
+      for (var doc in snap.docs) {
+        final data = doc.data();
+        await db.insert('users', {
+          'username': data['username'],
+          'password': data['password'],
+          'station': data['station'],
+          'role': data['role'],
+          'full_name': data['full_name'],
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    } catch (_) {}
+  }
 }
 
 Future<void> initDB() async {
@@ -179,19 +180,21 @@ Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
       'full_name': users[u]!['full_name']
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
-  try {
-    for (var u in users.keys) {
-      if (u != 'admin') {
-        FirebaseFirestore.instance.collection('users').doc(u).set({
-          'username': u,
-          'password': users[u]!['password'],
-          'station': users[u]!['station'],
-          'role': users[u]!['role'],
-          'full_name': users[u]!['full_name'],
-        });
+  if (isFirebaseReady) {
+    try {
+      for (var u in users.keys) {
+        if (u != 'admin') {
+          FirebaseFirestore.instance.collection('users').doc(u).set({
+            'username': u,
+            'password': users[u]!['password'],
+            'station': users[u]!['station'],
+            'role': users[u]!['role'],
+            'full_name': users[u]!['full_name'],
+          });
+        }
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
 }
 Future<Map<String, Map<String, double>>> loadFares() async {
   final db = await AppDB.getDB();
@@ -305,7 +308,16 @@ late Map<String, Map<String, dynamic>> users;
 
 Future<void> main() async { 
   WidgetsFlutterBinding.ensureInitialized(); 
-  try { await Firebase.initializeApp().timeout(const Duration(seconds: 3)); } catch (e) { debugPrint("Firebase init offline: $e"); }
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    isFirebaseReady = true;
+    debugPrint("✅ Firebase Ready");
+  } catch (e) {
+    isFirebaseReady = false;
+    debugPrint("⚠️ Firebase offline: $e");
+  }
   await initDB(); 
   routes = await loadFares(); 
   users = await loadUsers(); 
@@ -326,7 +338,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
       body: Column(children: [
         Container(width: double.infinity, color: ghRed, padding: const EdgeInsets.all(16), child: Column(children: [const Text("🇬🇭 REAL ME TROTRO", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)), Text(appSlogan, style: const TextStyle(color: Colors.white)), const SizedBox(height: 8), Container(height: 6, color: ghGold), Container(height: 6, color: ghGreen)])),
         Expanded(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text("Login: ${currentUser ?? 'Guest'}", textAlign: TextAlign.center),
+          Text("Login: ${currentUser ?? 'Guest'} | Cloud: ${isFirebaseReady ? 'ON ✅' : 'OFF'}", textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: isFirebaseReady ? ghGreen : ghRed, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
           ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PassengerScreen())), style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("1. Passenger - CHECK FARE")),
           ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginScreen())), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("2. Station Master Login")),
@@ -394,7 +406,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("VERIFY ADMIN")),
       ])));
     }
-    return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser ${isFirebaseReady ? 'Cloud ON' : 'Offline'}"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: isFirebaseReady ? Colors.green.shade50 : Colors.red.shade50, border: Border.all(color: isFirebaseReady ? ghGreen : ghRed, width: 2), borderRadius: BorderRadius.circular(8)), child: Text(isFirebaseReady ? "✅ Firebase Connected - Accounts will go to cloud!" : "⚠️ Firebase NOT connected - Update firebase_options.dart with real keys!", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+      const SizedBox(height: 12),
       const Text("Create New Station Master", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
       TextField(controller: newU, decoration: const InputDecoration(labelText: "Username e.g. cape2")),
       TextField(controller: fullN, decoration: const InputDecoration(labelText: "Full Name")),
@@ -405,7 +419,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         final nu = newU.text.toLowerCase().trim();
         if (nu.contains(" ") || nu.isEmpty || users.containsKey(nu)) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid or exists!"))); return; }
         users[nu] = {"password": hashPassword(newP.text), "station": titleCase(stationC.text.trim()), "role": "station_master", "full_name": titleCase(fullN.text.trim())};
-        setState(() => cloudMsg = "Uploading to cloud...");
+        setState(() => cloudMsg = "Saving...");
         await saveUsers(users);
         final msg = await syncUsersFromCloud();
         setState(() => cloudMsg = "✅ $nu created! $msg");
@@ -413,7 +427,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
       }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("CREATE ACCOUNT")),
       Text(cloudMsg, style: const TextStyle(fontWeight: FontWeight.bold, color: ghGreen)),
       const Divider(height: 32),
-      const Text("All Accounts - Professional", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+      const Text("All Accounts", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
       const SizedBox(height: 8),
       Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: const [
         DataColumn(label: Text("Username", style: TextStyle(fontWeight: FontWeight.bold))),
@@ -432,7 +446,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
               users.remove(e.key);
               final db = await AppDB.getDB();
               await db.delete('users', where: 'username=?', whereArgs: [e.key]);
-              try { await FirebaseFirestore.instance.collection('users').doc(e.key).delete(); } catch (_){}
+              if (isFirebaseReady) { try { await FirebaseFirestore.instance.collection('users').doc(e.key).delete(); } catch (_){} }
               setState(() {});
             }
           })),
@@ -481,7 +495,7 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Padding(padding: const EdgeInsets.all(16), child: SingleChildScrollView(child: Column(children: [
         Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: syncStatus.contains("✅") ? Colors.green.shade50 : Colors.orange.shade50, border: Border.all(color: syncStatus.contains("✅") ? ghGreen : ghGold, width: 2), borderRadius: BorderRadius.circular(8)), child: Column(children: [
           Text(syncStatus, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-          Text("$cloudCount accounts on device", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          Text("$cloudCount accounts on device | Firebase: ${isFirebaseReady ? 'ON' : 'OFF'}", style: const TextStyle(fontSize: 12, color: Colors.grey)),
         ])),
         const SizedBox(height: 12),
         ElevatedButton.icon(onPressed: _doSync, icon: const Icon(Icons.cloud_sync), label: const Text("SYNC FROM CLOUD"), style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(14))),
@@ -507,13 +521,20 @@ class StationMasterScreen extends StatefulWidget { final String username; const 
 class _StationMasterScreenState extends State<StationMasterScreen> {
   final nameC = TextEditingController(); final fromC = TextEditingController(); final toC = TextEditingController();
   String? fromVal; String? toVal;
+  final updFromC = TextEditingController(); final updToC = TextEditingController(); final updFareC = TextEditingController();
+  String? updFromVal; String? updToVal;
+  final newFromC = TextEditingController(); final newToC = TextEditingController(); final newFareC = TextEditingController();
   String info = ""; Map<String, dynamic>? lastSale;
+  
   Future<void> doPrint(Map<String, dynamic> sale) async {
     try { final pdfPath = await generatePdfTicket(sale); final bytes = await File(pdfPath).readAsBytes(); await Printing.sharePdf(bytes: bytes, filename: 'ticket_${sale['ticket_id']}.pdf'); } catch (_) { final p = await printSmallPaper(sale); if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("FILE: $p"))); }
   }
+  
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(appBar: AppBar(title: Text("Welcome ${users[widget.username]!['full_name']}")), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Text("STATION MASTER - SELL TICKET", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+      const SizedBox(height: 12),
       Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.yellow.shade100, border: Border.all(color: ghGold, width: 2), borderRadius: BorderRadius.circular(8)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text("PASSENGER NAME *", style: TextStyle(fontWeight: FontWeight.bold, color: ghRed)),
         TextField(controller: nameC, decoration: const InputDecoration(labelText: "Type Name", border: OutlineInputBorder())),
@@ -538,12 +559,58 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         Text("LAST: ${lastSale!['ticket_id']} | ${lastSale!['seat']} | GHS ${(lastSale!['fare'] as double).toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)),
         ElevatedButton(onPressed: () => doPrint(lastSale!), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("PRINT THIS TICKET")),
       ])),
-      const Divider(),
-      ElevatedButton(onPressed: () { String s = ""; for (var fs in routes.keys) { for (var ts in routes[fs]!.keys) { if (fs.compareTo(ts) < 0) s += "${titleCase(fs)} <-> ${titleCase(ts)}: GHS ${routes[fs]![ts]!.toStringAsFixed(2)}\n"; } } setState(() => info = s); }, child: const Text("View routes")),
+      
+      const Divider(height: 32),
+      // FARE UPDATE - FOR STATION MASTER BERNARD!
+      const Text("UPDATE FARE - STATION MASTER", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: ghRed)),
+      const SizedBox(height: 8),
+      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.shade50, border: Border.all(color: Colors.blue, width: 2), borderRadius: BorderRadius.circular(8)), child: Column(children: [
+        DropdownButtonFormField<String>(value: updFromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { updFromVal = v; updFromC.text = v ?? ""; }); }),
+        TextField(controller: updFromC, decoration: const InputDecoration(labelText: "From - Or Type")),
+        DropdownButtonFormField<String>(value: updToVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { updToVal = v; updToC.text = v ?? ""; }); }),
+        TextField(controller: updToC, decoration: const InputDecoration(labelText: "To - Or Type")),
+        TextField(controller: updFareC, decoration: const InputDecoration(labelText: "New Fare e.g. 50.0"), keyboardType: TextInputType.number),
+        const SizedBox(height: 8),
+        ElevatedButton(onPressed: () async {
+          final fs = resolveStation(updFromC.text, updFromVal);
+          final ts = resolveStation(updToC.text, updToVal);
+          final fare = double.tryParse(updFareC.text.trim());
+          if (fs.isEmpty || ts.isEmpty || fare == null) { setState(() => info = "Enter From, To and Fare!"); return; }
+          routes.putIfAbsent(fs, () => {})[ts] = fare;
+          routes.putIfAbsent(ts, () => {})[fs] = fare;
+          await saveFares(routes);
+          setState(() => info = "✅ Fare Updated! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}");
+          updFromC.clear(); updToC.clear(); updFareC.clear(); updFromVal = null; updToVal = null;
+        }, style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(12)), child: const Text("UPDATE FARE")),
+      ])),
+      
+      const SizedBox(height: 12),
+      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: Colors.orange), borderRadius: BorderRadius.circular(8)), child: Column(children: [
+        const Text("ADD NEW ROUTE", style: TextStyle(fontWeight: FontWeight.bold)),
+        TextField(controller: newFromC, decoration: const InputDecoration(labelText: "New From e.g. Takoradi")),
+        TextField(controller: newToC, decoration: const InputDecoration(labelText: "New To e.g. Accra")),
+        TextField(controller: newFareC, decoration: const InputDecoration(labelText: "Fare"), keyboardType: TextInputType.number),
+        const SizedBox(height: 8),
+        ElevatedButton(onPressed: () async {
+          final fs = newFromC.text.toLowerCase().trim();
+          final ts = newToC.text.toLowerCase().trim();
+          final fare = double.tryParse(newFareC.text.trim());
+          if (fs.isEmpty || ts.isEmpty || fare == null) { setState(() => info = "Enter From, To, Fare!"); return; }
+          routes.putIfAbsent(fs, () => {})[ts] = fare;
+          routes.putIfAbsent(ts, () => {})[fs] = fare;
+          await saveFares(routes);
+          setState(() => info = "✅ New Route Added! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}");
+          newFromC.clear(); newToC.clear(); newFareC.clear(); setState(() {});
+        }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("ADD NEW ROUTE")),
+      ])),
+
+      const Divider(height: 32),
+      ElevatedButton(onPressed: () { String s = ""; for (var fs in routes.keys) { for (var ts in routes[fs]!.keys) { if (fs.compareTo(ts) < 0) s += "${titleCase(fs)} <-> ${titleCase(ts)}: GHS ${routes[fs]![ts]!.toStringAsFixed(2)}\n"; } } setState(() => info = s); }, child: const Text("View all routes")),
       ElevatedButton(onPressed: () async { final r = await showSalesReport(); setState(() => info = r); }, child: const Text("Daily Sales")),
       ElevatedButton(onPressed: () async { final r = await showSeatMap(); setState(() => info = r); }, child: const Text("Seat Map")),
       ElevatedButton(onPressed: () async { final db = await AppDB.getDB(); await db.delete('seats'); setState(() => info = "Reset done"); }, child: const Text("Reset seats")),
       ElevatedButton(onPressed: () { currentUser = null; Navigator.pop(context); }, child: const Text("Logout")),
+      const SizedBox(height: 12),
       Text(info, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
     ])));
   }
