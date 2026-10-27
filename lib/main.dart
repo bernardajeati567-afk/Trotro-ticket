@@ -349,39 +349,127 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   }
 }
 
+// === NEW PASSENGER SCREEN WITH AUTO-CLEAR + TYPE SUGGESTION ===
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
-  String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = "";
-  double? autoFare; String autoRoute = "";
-  @override void initState() { super.initState(); fromC.addListener(_autoCheck); toC.addListener(_autoCheck); }
-  @override void dispose() { fromC.dispose(); toC.dispose(); super.dispose(); }
-  void _autoCheck() {
-    final fs = resolveStation(fromC.text, fromVal);
-    final ts = resolveStation(toC.text, toVal);
-    if (fs.isEmpty || ts.isEmpty) { setState(() { autoFare = null; autoRoute = ""; }); return; }
+  final fromC = TextEditingController();
+  final toC = TextEditingController();
+  String result = "";
+  double? autoFare;
+  String autoRoute = "";
+
+  List<String> getStations() => routes.keys.map((e) => titleCase(e)).toList()..sort();
+
+  void _checkFare() {
+    final fs = suggestStation(fromC.text, routes);
+    final ts = suggestStation(toC.text, routes);
+    if (fs.isEmpty || ts.isEmpty) {
+      setState(() { autoFare = null; autoRoute = ""; result = ""; });
+      return;
+    }
     if (routes.containsKey(fs) && routes[fs]!.containsKey(ts)) {
-      setState(() { autoFare = routes[fs]![ts]!; autoRoute = "${titleCase(fs)} -> ${titleCase(ts)}"; result = "FARE: $autoRoute = GHS ${autoFare!.toStringAsFixed(2)}"; });
-    } else { setState(() { autoFare = null; autoRoute = ""; }); }
+      final fare = routes[fs]![ts]!;
+      setState(() {
+        autoFare = fare;
+        autoRoute = "${titleCase(fs)} -> ${titleCase(ts)}";
+        result = "FARE: $autoRoute = GHS ${fare.toStringAsFixed(2)}";
+      });
+      // AUTO CLEAR AFTER 4 SECONDS
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) {
+          setState(() {
+            fromC.clear();
+            toC.clear();
+            autoFare = null;
+            autoRoute = "";
+            result = "";
+          });
+        }
+      });
+    } else {
+      setState(() {
+        autoFare = null;
+        autoRoute = "";
+        result = "No route found for ${titleCase(fs)} -> ${titleCase(ts)}";
+      });
+    }
   }
+
+  Widget _buildAutoField(TextEditingController ctrl, String label) {
+    return Autocomplete<String>(
+      optionsBuilder: (TextEditingValue textEditingValue) {
+        if (textEditingValue.text.trim().isEmpty) return const Iterable<String>.empty();
+        final q = textEditingValue.text.toLowerCase();
+        return getStations().where((s) => s.toLowerCase().contains(q));
+      },
+      fieldViewBuilder: (context, fieldCtrl, focusNode, onFieldSubmitted) {
+        // Sync fieldCtrl with our controller
+        fieldCtrl.text = ctrl.text;
+        fieldCtrl.selection = TextSelection.fromPosition(TextPosition(offset: fieldCtrl.text.length));
+        fieldCtrl.addListener(() { ctrl.text = fieldCtrl.text; });
+        return TextField(
+          controller: fieldCtrl,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            labelText: label,
+            border: const OutlineInputBorder(),
+            prefixIcon: Icon(label.contains("From") ? Icons.location_on : Icons.flag),
+            suffixIcon: IconButton(icon: const Icon(Icons.clear), onPressed: () { fieldCtrl.clear(); ctrl.clear(); setState(() { autoFare = null; result=""; }); }),
+          ),
+          onChanged: (_) => _checkFare(),
+        );
+      },
+      onSelected: (sel) {
+        ctrl.text = sel;
+        _checkFare();
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            child: SizedBox(
+              width: MediaQuery.of(context).size.width - 32,
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: options.length,
+                itemBuilder: (c, i) {
+                  final opt = options.elementAt(i);
+                  return ListTile(title: Text(opt), onTap: () => onSelected(opt));
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override Widget build(BuildContext context) {
-    final stations = routes.keys.toList();
-    return Scaffold(appBar: AppBar(title: const Text("PASSENGER CHECK")), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
-      DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { fromVal = v; fromC.text = v ?? ""; }); _autoCheck(); }),
-      TextField(controller: fromC, decoration: const InputDecoration(labelText: "From - Or Type")),
-      const SizedBox(height: 8),
-      DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e) => DropdownMenuItem(value: e, child: Text(titleCase(e)))).toList(), onChanged: (v) { setState(() { toVal = v; toC.text = v ?? ""; }); _autoCheck(); }),
-      TextField(controller: toC, decoration: const InputDecoration(labelText: "To - Or Type")),
-      const SizedBox(height: 12),
-      if (autoFare != null) Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width: 2), borderRadius: BorderRadius.circular(12)), child: Column(children: [Text(autoRoute, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), Text("FARE: GHS ${autoFare!.toStringAsFixed(2)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: ghGreen))])),
-      const SizedBox(height: 12),
-      ElevatedButton(onPressed: () {
-        final fs = resolveStation(fromC.text, fromVal); final ts = resolveStation(toC.text, toVal);
-        if (fs.isEmpty || ts.isEmpty) { setState(() => result = "Select From and To"); return; }
-        if (routes.containsKey(fs) && routes[fs]!.containsKey(ts)) { setState(() => result = "FARE: ${titleCase(fs)} -> ${titleCase(ts)} = GHS ${routes[fs]![ts]!.toStringAsFixed(2)}"); } else { setState(() => result = "No route"); }
-      }, child: const Text("CHECK FARE")),
-      const SizedBox(height: 16), Text(result, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-      if (result.startsWith("FARE:")) Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.shade50, border: Border.all(color: ghRed, width: 2), borderRadius: BorderRadius.circular(8)), child: const Text("⚠️ Don't pay more than this fare!", textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, color: ghRed))),
-    ])));
+    return Scaffold(
+      appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [
+        IconButton(icon: const Icon(Icons.refresh), onPressed: () { fromC.clear(); toC.clear(); setState(() { autoFare=null; result=""; }); })
+      ]),
+      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
+        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type station name - suggestions will appear! Auto clears after check.", style: TextStyle(fontSize: 12), textAlign: TextAlign.center)),
+        const SizedBox(height: 12),
+        _buildAutoField(fromC, "From - Type e.g. Cape Coast"),
+        const SizedBox(height: 12),
+        _buildAutoField(toC, "To - Type e.g. Accra"),
+        const SizedBox(height: 16),
+        SizedBox(width: double.infinity, child: ElevatedButton.icon(onPressed: _checkFare, icon: const Icon(Icons.search), label: const Text("CHECK FARE"), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)))),
+        const SizedBox(height: 16),
+        if (autoFare != null) Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width: 2), borderRadius: BorderRadius.circular(12)), child: Column(children: [Text(autoRoute, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 8), Text("FARE: GHS ${autoFare!.toStringAsFixed(2)}", style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: ghGreen)), const SizedBox(height: 8), const Text("Auto clearing in 4 sec...", style: TextStyle(fontSize: 11, color: Colors.grey))])),
+        const SizedBox(height: 12),
+        if (result.isNotEmpty) Text(result, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+        if (result.startsWith("FARE:")) Container(width: double.infinity, margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.shade50, border: Border.all(color: ghRed, width: 2), borderRadius: BorderRadius.circular(8)), child: const Text("⚠️ Don't pay more than this fare!", textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, color: ghRed))),
+        const SizedBox(height: 16),
+        const Text("All Routes", style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        ...routes.keys.expand((fs) => routes[fs]!.keys.where((ts) => fs.compareTo(ts) < 0).map((ts) => "${titleCase(fs)} <-> ${titleCase(ts)}: GHS ${routes[fs]![ts]!.toStringAsFixed(2)}")).toList().map((t) => Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Text(t, style: const TextStyle(fontSize: 12)))),
+      ])),
+    );
   }
 }
 
@@ -561,7 +649,6 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
       ])),
       
       const Divider(height: 32),
-      // FARE UPDATE - FOR STATION MASTER BERNARD!
       const Text("UPDATE FARE - STATION MASTER", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: ghRed)),
       const SizedBox(height: 8),
       Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.shade50, border: Border.all(color: Colors.blue, width: 2), borderRadius: BorderRadius.circular(8)), child: Column(children: [
