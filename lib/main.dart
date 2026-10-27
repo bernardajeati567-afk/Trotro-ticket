@@ -182,7 +182,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   }
 }
 
-// === PASSENGER SCREEN - DROPDOWN + TYPING SUGGESTION + AUTO CLEAR ===
+// === PASSENGER SCREEN - FINAL: TAP SUGGESTION TO SHOW PRICE + SLOW 10 SEC CLEAR ===
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal;
@@ -192,51 +192,128 @@ class _PassengerScreenState extends State<PassengerScreen> {
   String result = "";
   double? autoFare;
   String autoRoute = "";
+  int countdown = 10;
 
   List<String> getStationsTitle() => routes.keys.map((e) => titleCase(e)).toList()..sort();
 
-  void _checkFare() {
+  void _showFare() {
     final fs = resolveStation(fromC.text, fromVal);
     final ts = resolveStation(toC.text, toVal);
-    if (fs.isEmpty || ts.isEmpty) { setState(() { autoFare=null; autoRoute=""; result=""; }); return; }
+    if (fs.isEmpty || ts.isEmpty) { setState(() => result = "Select From and To"); return; }
     if (routes.containsKey(fs) && routes[fs]!.containsKey(ts)) {
       final fare = routes[fs]![ts]!;
-      setState(() { autoFare=fare; autoRoute="${titleCase(fs)} -> ${titleCase(ts)}"; result="FARE: $autoRoute = GHS ${fare.toStringAsFixed(2)}"; });
-      Future.delayed(const Duration(seconds: 4), () { if(mounted){ setState((){ fromC.clear(); toC.clear(); fromVal=null; toVal=null; autoFare=null; autoRoute=""; result=""; }); } });
-    } else { setState((){ autoFare=null; autoRoute=""; result="No route for ${titleCase(fs)} -> ${titleCase(ts)}"; }); }
+      setState(() {
+        autoFare = fare;
+        autoRoute = "${titleCase(fs)} -> ${titleCase(ts)}";
+        result = "FARE: $autoRoute = GHS ${fare.toStringAsFixed(2)}";
+        countdown = 10;
+      });
+      // Slow clear 10 sec with countdown
+      Future.doWhile(() async {
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted || autoFare == null) return false;
+        setState(() => countdown--);
+        if (countdown <= 0) {
+          setState(() {
+            fromC.clear(); toC.clear();
+            fromVal = null; toVal = null;
+            autoFare = null; autoRoute = ""; result = "";
+          });
+          return false;
+        }
+        return true;
+      });
+    } else {
+      setState(() => result = "No route for ${titleCase(fs)} -> ${titleCase(ts)}");
+    }
   }
 
   Widget _typeField(TextEditingController ctrl, String label, ValueChanged<String> onPicked) {
     return Autocomplete<String>(
-      optionsBuilder: (TextEditingValue v){ if(v.text.trim().isEmpty) return const Iterable<String>.empty(); final q=v.text.toLowerCase(); return getStationsTitle().where((s)=>s.toLowerCase().contains(q)); },
-      fieldViewBuilder: (c, fieldCtrl, focusNode, onSub){
-        if(ctrl.text.isNotEmpty && fieldCtrl.text.isEmpty) fieldCtrl.text = ctrl.text;
-        fieldCtrl.addListener((){ ctrl.text = fieldCtrl.text; });
-        return TextField(controller: fieldCtrl, focusNode: focusNode, decoration: InputDecoration(labelText: label, border: const OutlineInputBorder(), prefixIcon: const Icon(Icons.edit), suffixIcon: IconButton(icon: const Icon(Icons.clear), onPressed: (){ fieldCtrl.clear(); ctrl.clear(); onPicked(""); _checkFare(); })), onChanged: (_)=>_checkFare());
+      optionsBuilder: (TextEditingValue v) {
+        if (v.text.trim().isEmpty) return const Iterable<String>.empty();
+        final q = v.text.toLowerCase();
+        return getStationsTitle().where((s) => s.toLowerCase().contains(q));
       },
-      onSelected: (sel){ ctrl.text = sel; onPicked(sel); _checkFare(); },
-      optionsViewBuilder: (c, onSel, opts){ return Align(alignment: Alignment.topLeft, child: Material(elevation: 4, child: SizedBox(width: MediaQuery.of(c).size.width-32, child: ListView.builder(padding: EdgeInsets.zero, shrinkWrap: true, itemCount: opts.length, itemBuilder: (c,i){ final o=opts.elementAt(i); return ListTile(title: Text(o), onTap: ()=>onSel(o)); })))); },
+      fieldViewBuilder: (c, fieldCtrl, focusNode, onSub) {
+        // Sync but DON'T auto show fare
+        if (ctrl.text.isNotEmpty && fieldCtrl.text.isEmpty) fieldCtrl.text = ctrl.text;
+        fieldCtrl.addListener(() {
+          ctrl.text = fieldCtrl.text;
+          // NO AUTO FARE HERE - user must tap suggestion
+        });
+        return TextField(
+          controller: fieldCtrl,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: "Type, then TAP suggestion below",
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.edit),
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.clear),
+              onPressed: () {
+                fieldCtrl.clear();
+                ctrl.clear();
+                onPicked("");
+                setState(() { autoFare = null; result = ""; });
+              },
+            ),
+          ),
+        );
+      },
+      onSelected: (sel) {
+        ctrl.text = sel;
+        onPicked(sel);
+        _showFare(); // PRICE ONLY WHEN TAP SUGGESTION
+      },
+      optionsViewBuilder: (c, onSel, opts) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            child: SizedBox(
+              width: MediaQuery.of(c).size.width - 32,
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: opts.length,
+                itemBuilder: (c, i) {
+                  final o = opts.elementAt(i);
+                  return ListTile(
+                    leading: const Icon(Icons.location_on, color: ghRed),
+                    title: Text(o),
+                    subtitle: const Text("Tap to show fare"),
+                    onTap: () => onSel(o),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
-  @override Widget build(BuildContext context) {
+  @override
+  Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(
       appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: (){ fromC.clear(); toC.clear(); setState((){ fromVal=null; toVal=null; autoFare=null; result=""; }); })]),
       body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
-        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 2 ways: Drop-down select OR Type with suggestion! Auto clears after 4 sec.", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)),
+        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type to see suggestions - TAP suggestion to see fare! Clears after 10 sec.", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)),
         const SizedBox(height:12),
-        DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); _checkFare(); }),
+        DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); if(v!=null) _showFare(); }),
         const SizedBox(height:8),
-        _typeField(fromC, "From - Or Type with suggestion", (sel){ setState((){ if(sel.isEmpty){ fromVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); fromVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }),
+        _typeField(fromC, "From - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ fromVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); fromVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }),
         const SizedBox(height:16),
-        DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ toVal=v; toC.text=v??""; }); _checkFare(); }),
+        DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ toVal=v; toC.text=v??""; }); if(v!=null) _showFare(); }),
         const SizedBox(height:8),
-        _typeField(toC, "To - Or Type with suggestion", (sel){ setState((){ if(sel.isEmpty){ toVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); toVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }),
+        _typeField(toC, "To - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ toVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); toVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }),
         const SizedBox(height:16),
-        SizedBox(width:double.infinity, child: ElevatedButton.icon(onPressed: _checkFare, icon: const Icon(Icons.search), label: const Text("CHECK FARE"), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)))),
+        SizedBox(width:double.infinity, child: ElevatedButton.icon(onPressed: _showFare, icon: const Icon(Icons.search), label: const Text("CHECK FARE"), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)))),
         const SizedBox(height:16),
-        if(autoFare!=null) Container(width:double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width:2), borderRadius: BorderRadius.circular(12)), child: Column(children:[Text(autoRoute, style: const TextStyle(fontSize:18, fontWeight: FontWeight.bold)), const SizedBox(height:8), Text("FARE: GHS ${autoFare!.toStringAsFixed(2)}", style: const TextStyle(fontSize:28, fontWeight: FontWeight.bold, color: ghGreen)), const SizedBox(height:8), const Text("Auto clearing in 4 sec...", style: TextStyle(fontSize:11, color: Colors.grey))])),
+        if(autoFare!=null) Container(width:double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width:2), borderRadius: BorderRadius.circular(12)), child: Column(children:[Text(autoRoute, style: const TextStyle(fontSize:18, fontWeight: FontWeight.bold)), const SizedBox(height:8), Text("FARE: GHS ${autoFare!.toStringAsFixed(2)}", style: const TextStyle(fontSize:28, fontWeight: FontWeight.bold, color: ghGreen)), const SizedBox(height:8), Text("Auto clearing in $countdown sec...", style: const TextStyle(fontSize:11, color: Colors.grey))])),
         if(result.isNotEmpty) Padding(padding: const EdgeInsets.only(top:12), child: Text(result, style: const TextStyle(fontSize:16, fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
         if(result.startsWith("FARE:")) Container(width:double.infinity, margin: const EdgeInsets.only(top:12), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.shade50, border: Border.all(color: ghRed, width:2), borderRadius: BorderRadius.circular(8)), child: const Text("⚠️ Don't pay more than this fare!", textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, color: ghRed))),
       ])),
