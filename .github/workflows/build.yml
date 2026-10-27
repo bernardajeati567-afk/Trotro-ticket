@@ -1,4 +1,4 @@
-name: Build APK
+name: Build AAB for Play Store
 on:
   push:
     branches: [main]
@@ -25,8 +25,8 @@ jobs:
             min_sdk_android: 21
           EOF
       - run: dart run flutter_launcher_icons
-      - run: flutter build apk --release
+      - run: flutter build appbundle --release
       - uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: appbundle-release
+          path: build/app/outputs/bundle/release/app-release.aab
