@@ -64,7 +64,7 @@ class FareNotificationService {
       await _local.initialize(initSettings);
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
       FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
-        _showLocal(msg.notification?.title ?? "REAL ME FARE UPDATE", msg.notification?.body ?? "Fare changed!");
+        _showLocal(msg.notification?.title ?? "REAL ME FARE UPDATE", msg.notification?.body ?? "Fares are updated pls check before u travel");
       });
       await _fcm.subscribeToTopic("ALL_FARES_UPDATES");
     } catch(e){}
@@ -74,12 +74,23 @@ class FareNotificationService {
     const NotificationDetails details = NotificationDetails(android: androidDetails);
     await _local.show(DateTime.now().millisecondsSinceEpoch % 100000, title, body, details);
   }
-  static Future<void> notifyFareChanged(String from, String to, double fare) async {
+  static Future<void> saveFareOnly(String from, String to, double fare) async {
     if (!isFirebaseReady) return;
     try {
-      await FirebaseFirestore.instance.collection('fare_updates').add({'from': from,'to': to,'fare': fare,'message': 'REAL ME: ${titleCase(from)} -> ${titleCase(to)} fare now GHS ${fare.toStringAsFixed(2)}','timestamp': FieldValue.serverTimestamp(),});
-      await FirebaseFirestore.instance.collection('fares').doc('${from}_${to}').set({'from_s': from, 'to_s': to, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
-      await FirebaseFirestore.instance.collection('fares').doc('${to}_${from}').set({'from_s': to, 'to_s': from, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('fares').doc('${from}_${to}').set({'from_s': from, 'to_s': to, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp(), 'updatedBy': currentUser}, SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('fares').doc('${to}_${from}').set({'from_s': to, 'to_s': from, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp(), 'updatedBy': currentUser}, SetOptions(merge: true));
+    } catch (e) {}
+  }
+  static Future<void> notifyAllFaresUpdatedByAdmin() async {
+    if (!isFirebaseReady) return;
+    try {
+      await FirebaseFirestore.instance.collection('fare_updates').add({
+        'title': 'REAL ME FARE UPDATE',
+        'message': 'Fares are updated pls check before u travel - Real Me Trotro Team',
+        'timestamp': FieldValue.serverTimestamp(),
+        'sentBy': currentUser ?? 'admin',
+        'type': 'GENERAL_UPDATE'
+      });
     } catch (e) {}
   }
 }
@@ -220,7 +231,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = ""; double? autoFare; String autoRoute = ""; int countdown = 10;
-  @override void initState() { super.initState(); if (isFirebaseReady) { FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async { if (snap.docs.isNotEmpty && mounted) { final data = snap.docs.first.data(); final msg = data['message'] ?? 'Fare updated'; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("🔔 $msg", style: const TextStyle(fontWeight: FontWeight.bold)), backgroundColor: ghGreen, duration: const Duration(seconds: 6))); try { final fSnap = await FirebaseFirestore.instance.collection('fares').get(); final db = await AppDB.getDB(); for (var doc in fSnap.docs) { final d = doc.data(); if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) { await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace); } } routes = await loadFares(); if(mounted) setState((){}); } catch(_){} } }); } }
+  @override void initState() { super.initState(); if (isFirebaseReady) { FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async { if (snap.docs.isNotEmpty && mounted) { final data = snap.docs.first.data(); final msg = data['message'] ?? 'Fares are updated pls check before u travel'; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("🔔 $msg", style: const TextStyle(fontWeight: FontWeight.bold)), backgroundColor: ghGreen, duration: const Duration(seconds: 6))); try { final fSnap = await FirebaseFirestore.instance.collection('fares').get(); final db = await AppDB.getDB(); for (var doc in fSnap.docs) { final d = doc.data(); if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) { await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace); } } routes = await loadFares(); if(mounted) setState((){}); } catch(_){} } }); } }
   List<String> getStationsTitle() => routes.keys.map((e) => titleCase(e)).toList()..sort();
   void _showFare() {
     final fs = resolveStation(fromC.text, fromVal); final ts = resolveStation(toC.text, toVal);
@@ -260,7 +271,37 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   String? adminUser; final adminU = TextEditingController(); final adminP = TextEditingController(); final newU = TextEditingController(); final fullN = TextEditingController(); final newP = TextEditingController(); final stationC = TextEditingController(); String cloudMsg = "";
   @override Widget build(BuildContext context) {
     if (adminUser == null) { return Scaffold(appBar: AppBar(title: const Text("ADMIN - SECURE ACCESS"), backgroundColor: ghRed), body: Padding(padding: const EdgeInsets.all(16), child: Column(children: [const Icon(Icons.lock, size:60, color:ghRed), const Text("ADMIN ONLY", style:TextStyle(fontSize:18, fontWeight: FontWeight.bold)), TextField(controller: adminU, decoration: const InputDecoration(labelText: "Admin Username")), TextField(controller: adminP, obscureText:true, decoration: const InputDecoration(labelText: "Admin Password")), const SizedBox(height:12), ElevatedButton(onPressed: (){ final un=adminU.text.toLowerCase().trim(); final pw=adminP.text.trim(); if(users.containsKey(un) && verifyPassword(users[un]!['password'], pw) && users[un]!['role']=='admin'){ setState(()=>adminUser=un); } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Auth failed!"))); } }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("VERIFY ADMIN")),]))); }
-    return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser ${isFirebaseReady?'Cloud ON':'Offline'}"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: isFirebaseReady?Colors.green.shade50:Colors.red.shade50, border: Border.all(color: isFirebaseReady?ghGreen:ghRed, width:2), borderRadius: BorderRadius.circular(8)), child: Text(isFirebaseReady?"✅ Firebase Connected":"⚠️ Firebase OFF", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:12))), const SizedBox(height:12), const Text("Create New Station Master", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), TextField(controller: newU, decoration: const InputDecoration(labelText: "Username e.g. cape2")), TextField(controller: fullN, decoration: const InputDecoration(labelText: "Full Name")), TextField(controller: newP, decoration: const InputDecoration(labelText: "Password")), TextField(controller: stationC, decoration: const InputDecoration(labelText: "Station")), const SizedBox(height:8), ElevatedButton(onPressed: () async { final nu=newU.text.toLowerCase().trim(); if(nu.contains(" ")||nu.isEmpty||users.containsKey(nu)){ ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid or exists!"))); return; } users[nu]={"password":hashPassword(newP.text),"station":titleCase(stationC.text.trim()),"role":"station_master","full_name":titleCase(fullN.text.trim())}; setState(()=>cloudMsg="Saving..."); await saveUsers(users); final msg=await syncUsersFromCloud(); setState(()=>cloudMsg="✅ $nu created! $msg"); newU.clear(); fullN.clear(); newP.clear(); stationC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("CREATE ACCOUNT")), Text(cloudMsg, style: const TextStyle(fontWeight: FontWeight.bold, color: ghGreen)), const Divider(height:32), const Text("All Accounts", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), const SizedBox(height:8), Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: const [DataColumn(label: Text("Username", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Full Name", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Station", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Delete", style: TextStyle(fontWeight: FontWeight.bold))),], rows: users.entries.map((e){ final isAdmin=e.value['role']=='admin'; return DataRow(cells:[DataCell(Text(e.key)), DataCell(Text(e.value['full_name'])), DataCell(Text(e.value['station'])), DataCell(isAdmin?const Icon(Icons.lock, color: Colors.grey):IconButton(icon: const Icon(Icons.delete, color: ghRed), onPressed: () async { final confirm=await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: Text("Delete ${e.key}?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES")), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("NO"))])); if(confirm==true){ users.remove(e.key); final db=await AppDB.getDB(); await db.delete('users', where:'username=?', whereArgs:[e.key]); if(isFirebaseReady){ try{ await FirebaseFirestore.instance.collection('users').doc(e.key).delete(); }catch(_){} } setState((){}); } })),]); }).toList()))), const SizedBox(height:16), ElevatedButton(onPressed: ()=>setState(()=>adminUser=null), child: const Text("Logout Admin")),]))); }
+    return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser ${isFirebaseReady?'Cloud ON':'Offline'}"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: isFirebaseReady?Colors.green.shade50:Colors.red.shade50, border: Border.all(color: isFirebaseReady?ghGreen:ghRed, width:2), borderRadius: BorderRadius.circular(8)), child: Text(isFirebaseReady?"✅ Firebase Connected":"⚠️ Firebase OFF", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:12))), const SizedBox(height:12), const Text("Create New Station Master", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), TextField(controller: newU, decoration: const InputDecoration(labelText: "Username e.g. cape2")), TextField(controller: fullN, decoration: const InputDecoration(labelText: "Full Name")), TextField(controller: newP, decoration: const InputDecoration(labelText: "Password")), TextField(controller: stationC, decoration: const InputDecoration(labelText: "Station")), const SizedBox(height:8), ElevatedButton(onPressed: () async { final nu=newU.text.toLowerCase().trim(); if(nu.contains(" ")||nu.isEmpty||users.containsKey(nu)){ ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid or exists!"))); return; } users[nu]={"password":hashPassword(newP.text),"station":titleCase(stationC.text.trim()),"role":"station_master","full_name":titleCase(fullN.text.trim())}; setState(()=>cloudMsg="Saving..."); await saveUsers(users); final msg=await syncUsersFromCloud(); setState(()=>cloudMsg="✅ $nu created! $msg"); newU.clear(); fullN.clear(); newP.clear(); stationC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("CREATE ACCOUNT")), Text(cloudMsg, style: const TextStyle(fontWeight: FontWeight.bold, color: ghGreen)), const Divider(height:32), const Text("All Accounts", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), const SizedBox(height:8), Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: const [DataColumn(label: Text("Username", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Full Name", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Station", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Delete", style: TextStyle(fontWeight: FontWeight.bold))),], rows: users.entries.map((e){ final isAdmin=e.value['role']=='admin'; return DataRow(cells:[DataCell(Text(e.key)), DataCell(Text(e.value['full_name'])), DataCell(Text(e.value['station'])), DataCell(isAdmin?const Icon(Icons.lock, color: Colors.grey):IconButton(icon: const Icon(Icons.delete, color: ghRed), onPressed: () async { final confirm=await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: Text("Delete ${e.key}?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES")), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("NO"))])); if(confirm==true){ users.remove(e.key); final db=await AppDB.getDB(); await db.delete('users', where:'username=?', whereArgs:[e.key]); if(isFirebaseReady){ try{ await FirebaseFirestore.instance.collection('users').doc(e.key).delete(); }catch(_){} } setState((){}); } })),]); }).toList()))), 
+      const Divider(height:32),
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: ghRed.withOpacity(0.08), border: Border.all(color: ghRed, width:3), borderRadius: BorderRadius.circular(12)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[
+          const Text("🚨 ADMIN FARE NOTIFICATION CONTROL", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed), textAlign: TextAlign.center),
+          const SizedBox(height:8),
+          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: ghGold)), child: const Text("Boss Strategy:\n1. Fuel ⛽ increases\n2. Tell Station Masters: Update fares within 3 days\n3. After 3 days, check if all updated\n4. Press button below to notify ALL users at once", style: TextStyle(fontSize:11))),
+          const SizedBox(height:12),
+          ElevatedButton.icon(
+            onPressed: () async {
+              final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(
+                title: const Text("Send Fare Update to ALL Users?"),
+                content: const Text("This will send to ALL phones:\n\n'Fares are updated pls check before u travel'\n\nContinue?"),
+                actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES SEND", style: TextStyle(fontWeight: FontWeight.bold))), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("CANCEL"))]
+              ));
+              if(confirm==true){
+                await FareNotificationService.notifyAllFaresUpdatedByAdmin();
+                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Notification Sent! All users will see: Fares are updated pls check before u travel"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
+              }
+            },
+            icon: const Icon(Icons.campaign, size:30),
+            label: const Text("📢 PRESS TO NOTIFY ALL USERS\nFARES UPDATED", textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, fontSize:13)),
+            style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(18))
+          ),
+          const SizedBox(height:8),
+          const Text("Only Admin can press this! Station Masters cannot!", style: TextStyle(fontSize:10, color: Colors.grey, fontStyle: FontStyle.italic), textAlign: TextAlign.center),
+        ]),
+      ),
+      const SizedBox(height:16), ElevatedButton(onPressed: ()=>setState(()=>adminUser=null), child: const Text("Logout Admin")),]))); }
 }
 
 class VerifyScreen extends StatefulWidget { const VerifyScreen({super.key}); @override State<VerifyScreen> createState() => _VerifyScreenState(); }
@@ -316,7 +357,9 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         if(lastSale!=null) Container(margin: const EdgeInsets.only(top:12), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen)), child: Column(children:[Text("LAST: ${lastSale!['ticket_id']} | ${lastSale!['seat']} | ${lastSale!['car_plate']} | GHS ${(lastSale!['fare'] as double).toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)), ElevatedButton(onPressed: ()=>doPrint(lastSale!), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("PRINT THIS TICKET")),])),
       ])),
       const Divider(height:32),
-      const Text("UPDATE FARE - STATION MASTER (Notifies Passengers)", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed)), const SizedBox(height:8),
+      const Text("UPDATE FARE - STATION MASTER", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed)), 
+      const Text("Fare will be SAVED but Admin will notify users later", style: TextStyle(fontSize:10, color: Colors.grey)),
+      const SizedBox(height:8),
       Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.shade50, border: Border.all(color: Colors.blue, width:2), borderRadius: BorderRadius.circular(8)), child: Column(children:[
         DropdownButtonFormField<String>(value: updFromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ updFromVal=v; updFromC.text=v??""; }); }),
         TextField(controller: updFromC, decoration: const InputDecoration(labelText: "From - Or Type")),
@@ -329,10 +372,10 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
           if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To and Fare!"); return; }
           routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare;
           await saveFares(routes);
-          await FareNotificationService.notifyFareChanged(fs, ts, fare);
-          setState(()=>info="✅ Fare Updated & Passengers Notified! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}");
+          await FareNotificationService.saveFareOnly(fs, ts, fare);
+          setState(()=>info="✅ Fare SAVED: ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)} | Waiting for Admin to notify all users!");
           updFromC.clear(); updToC.clear(); updFareC.clear(); updFromVal=null; updToVal=null;
-        }, style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(12)), child: const Text("UPDATE FARE & NOTIFY")),
+        }, style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(12)), child: const Text("SAVE FARE (Admin will notify)")),
       ])),
       const SizedBox(height:12),
       Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: Colors.orange), borderRadius: BorderRadius.circular(8)), child: Column(children:[const Text("ADD NEW ROUTE", style: TextStyle(fontWeight: FontWeight.bold)), TextField(controller: newFromC, decoration: const InputDecoration(labelText: "New From e.g. Takoradi")), TextField(controller: newToC, decoration: const InputDecoration(labelText: "New To e.g. Accra")), TextField(controller: newFareC, decoration: const InputDecoration(labelText: "Fare"), keyboardType: TextInputType.number), const SizedBox(height:8), ElevatedButton(onPressed: () async { final fs=newFromC.text.toLowerCase().trim(); final ts=newToC.text.toLowerCase().trim(); final fare=double.tryParse(newFareC.text.trim()); if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To, Fare!"); return; } routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare; await saveFares(routes); setState(()=>info="✅ New Route Added! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}"); newFromC.clear(); newToC.clear(); newFareC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("ADD NEW ROUTE")),])),
