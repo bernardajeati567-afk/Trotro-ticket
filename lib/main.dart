@@ -11,6 +11,8 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'firebase_options.dart';
 
 const String dbFile = "trotro.db";
@@ -46,26 +48,58 @@ bool verifyPassword(String stored, String provided) {
   } catch (_) { return false; }
 }
 
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+}
+
+class FareNotificationService {
+  static final FirebaseMessaging _fcm = FirebaseMessaging.instance;
+  static final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
+  static Future<void> init() async {
+    try {
+      await _fcm.requestPermission(alert: true, badge: true, sound: true);
+      const AndroidInitializationSettings android = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const InitializationSettings initSettings = InitializationSettings(android: android);
+      await _local.initialize(initSettings);
+      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+      FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
+        _showLocal(msg.notification?.title ?? "REAL ME FARE UPDATE", msg.notification?.body ?? "Fare changed!");
+      });
+      await _fcm.subscribeToTopic("ALL_FARES_UPDATES");
+    } catch(e){}
+  }
+  static Future<void> _showLocal(String title, String body) async {
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails('fare_updates_channel', 'Fare Updates', channelDescription: 'Real Me Trotro Fare Updates', importance: Importance.max, priority: Priority.high);
+    const NotificationDetails details = NotificationDetails(android: androidDetails);
+    await _local.show(DateTime.now().millisecondsSinceEpoch % 100000, title, body, details);
+  }
+  static Future<void> notifyFareChanged(String from, String to, double fare) async {
+    if (!isFirebaseReady) return;
+    try {
+      await FirebaseFirestore.instance.collection('fare_updates').add({'from': from,'to': to,'fare': fare,'message': 'REAL ME: ${titleCase(from)} -> ${titleCase(to)} fare now GHS ${fare.toStringAsFixed(2)}','timestamp': FieldValue.serverTimestamp(),});
+      await FirebaseFirestore.instance.collection('fares').doc('${from}_${to}').set({'from_s': from, 'to_s': to, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('fares').doc('${to}_${from}').set({'from_s': to, 'to_s': from, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+    } catch (e) {}
+  }
+}
+
 class AppDB {
   static Database? _db;
   static Future<Database> getDB() async {
     if (_db != null) return _db!;
     final dbPath = await getDatabasesPath();
-    _db = await openDatabase(path.join(dbPath, dbFile), version: 3, onCreate: (db, v) async {
+    _db = await openDatabase(path.join(dbPath, dbFile), version: 4, onCreate: (db, v) async {
       await db.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY,password TEXT,station TEXT,role TEXT,full_name TEXT)');
       await db.execute('CREATE TABLE IF NOT EXISTS fares (from_s TEXT,to_s TEXT,fare REAL,PRIMARY KEY (from_s,to_s))');
       await db.execute('CREATE TABLE IF NOT EXISTS seats (seat TEXT PRIMARY KEY)');
-      await db.execute('CREATE TABLE IF NOT EXISTS sales (ticket_id TEXT PRIMARY KEY,date TEXT,time TEXT,name TEXT,from_s TEXT,to_s TEXT,fare REAL,seat TEXT,sold_by TEXT)');
+      await db.execute('CREATE TABLE IF NOT EXISTS sales (ticket_id TEXT PRIMARY KEY,date TEXT,time TEXT,name TEXT,from_s TEXT,to_s TEXT,fare REAL,seat TEXT,sold_by TEXT,car_plate TEXT)');
     }, onUpgrade: (db, oldV, newV) async {
-      if (oldV < 3) {
-        for (var old in ['capecoast','swedru','accra','kumasi','tamale','master']) {
-          await db.delete('users', where: 'username=?', whereArgs: [old]);
-        }
-      }
       await db.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY,password TEXT,station TEXT,role TEXT,full_name TEXT)');
       await db.execute('CREATE TABLE IF NOT EXISTS fares (from_s TEXT,to_s TEXT,fare REAL,PRIMARY KEY (from_s,to_s))');
       await db.execute('CREATE TABLE IF NOT EXISTS seats (seat TEXT PRIMARY KEY)');
-      await db.execute('CREATE TABLE IF NOT EXISTS sales (ticket_id TEXT PRIMARY KEY,date TEXT,time TEXT,name TEXT,from_s TEXT,to_s TEXT,fare REAL,seat TEXT,sold_by TEXT)');
+      await db.execute('CREATE TABLE IF NOT EXISTS sales (ticket_id TEXT PRIMARY KEY,date TEXT,time TEXT,name TEXT,from_s TEXT,to_s TEXT,fare REAL,seat TEXT,sold_by TEXT,car_plate TEXT)');
+      if (oldV < 4) { try { await db.execute('ALTER TABLE sales ADD COLUMN car_plate TEXT'); } catch(_){} }
     });
     return _db!;
   }
@@ -139,20 +173,21 @@ Future<Map<String, Map<String, double>>> loadFares() async {
 Future<void> saveFares(Map<String, Map<String, double>> routes) async {
   final db = await AppDB.getDB(); await db.delete('fares'); for (var fs in routes.keys) { for (var ts in routes[fs]!.keys) { await db.insert('fares', {'from_s': fs, 'to_s': ts, 'fare': routes[fs]![ts]}); } }
   final dir = await getApplicationDocumentsDirectory(); await File(path.join(dir.path, fareFile)).writeAsString(jsonEncode(routes));
+  if (isFirebaseReady) { try { for (var fs in routes.keys) { for (var ts in routes[fs]!.keys) { await FirebaseFirestore.instance.collection('fares').doc('${fs}_${ts}').set({'from_s': fs, 'to_s': ts, 'fare': routes[fs]![ts], 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true)); } } } catch(_){} }
 }
 Future<List<String>> loadSeats() async { final db = await AppDB.getDB(); final rows = await db.query('seats'); final used = rows.map((e) => e['seat'] as String).toSet(); final allSeats = [for (int i = 1; i <= 30; i++) "A${i.toString().padLeft(2, '0')}"]; return allSeats.where((s) => !used.contains(s)).toList(); }
 Future<void> saveSeat(String seat) async { final db = await AppDB.getDB(); await db.insert('seats', {'seat': seat}, conflictAlgorithm: ConflictAlgorithm.ignore); }
 String generateTicketId() => "T${Random().nextInt(90001) + 9999}";
 String titleCase(String s) => s.isEmpty ? s : s.split(' ').map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1)).join(' ');
 
-Future<String> printSmallPaper(Map<String, dynamic> sale) async { final dir = await getApplicationDocumentsDirectory(); final fn = "PRINT_${sale['ticket_id']}.txt"; final rn = "${titleCase(sale['from'])}-${titleCase(sale['to'])}"; final qr = "REALME|${sale['ticket_id']}|${sale['seat']}|$rn|${sale['fare']}|${sale['date']}"; final content = "REAL ME TROTRO\nTicket: ${sale['ticket_id']}\nDate: ${sale['date']} ${sale['time']}\nPassenger: ${sale['name']}\nRoute: $rn\nSeat: ${sale['seat']}\nSold By: ${sale['sold_by']}\nFARE: GHS ${(sale['fare'] as double).toStringAsFixed(2)} PAID\nQR: $qr\n"; final file = File(path.join(dir.path, fn)); await file.writeAsString(content, encoding: utf8); return file.path; }
+Future<String> printSmallPaper(Map<String, dynamic> sale) async { final dir = await getApplicationDocumentsDirectory(); final fn = "PRINT_${sale['ticket_id']}.txt"; final rn = "${titleCase(sale['from'])}-${titleCase(sale['to'])}"; final qr = "REALME|${sale['ticket_id']}|${sale['seat']}|$rn|${sale['fare']}|${sale['date']}|${sale['car_plate'] ?? ''}"; final content = "REAL ME TROTRO\nTicket: ${sale['ticket_id']}\nDate: ${sale['date']} ${sale['time']}\nPassenger: ${sale['name']}\nRoute: $rn\nSeat: ${sale['seat']}\nCar Plate: ${sale['car_plate'] ?? 'N/A'}\nSold By: ${sale['sold_by']}\nFARE: GHS ${(sale['fare'] as double).toStringAsFixed(2)} PAID\nQR: $qr\n"; final file = File(path.join(dir.path, fn)); await file.writeAsString(content, encoding: utf8); return file.path; }
 Future<String> generatePdfTicket(Map<String, dynamic> d) async {
   try {
-    final rn = "${titleCase(d['from'])}-${titleCase(d['to'])}"; final qr = "REALME|${d['ticket_id']}|${d['seat']}|$rn|${d['fare']}|${d['date']} ${d['time']}";
-    final pdf = pw.Document(); pdf.addPage(pw.Page(build: (context) { return pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [pw.Container(color: PdfColor.fromHex('CE1126'), width: double.infinity, padding: const pw.EdgeInsets.all(12), child: pw.Column(children: [pw.Text('REAL ME TROTRO - GOVERNMENT EDITION', style: pw.TextStyle(color: PdfColors.white, fontSize: 16, fontWeight: pw.FontWeight.bold)), pw.Text('Safe. Fast. Reliable. | Government Approved', style: const pw.TextStyle(color: PdfColors.white, fontSize: 9))])), pw.SizedBox(height: 16), pw.Text('Ticket ID: ${d['ticket_id']}'), pw.Text('Name: ${d['name']}'), pw.Text('Sold By: ${d['sold_by']}'), pw.Text('Route: $rn'), pw.Text('Seat: ${d['seat']}'), pw.Text('Fare: GHS ${(d['fare'] as double).toStringAsFixed(2)} PAID', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)), pw.Text('Date: ${d['date']} ${d['time']}'), pw.SizedBox(height: 12), pw.Text('QR: $qr', style: const pw.TextStyle(fontSize: 8)),]); })); final dir = await getApplicationDocumentsDirectory(); final fn = path.join(dir.path, "ticket_${d['ticket_id']}.pdf"); final file = File(fn); await file.writeAsBytes(await pdf.save()); return fn;
+    final rn = "${titleCase(d['from'])}-${titleCase(d['to'])}"; final qr = "REALME|${d['ticket_id']}|${d['seat']}|$rn|${d['fare']}|${d['date']} ${d['time']}|${d['car_plate'] ?? ''}";
+    final pdf = pw.Document(); pdf.addPage(pw.Page(build: (context) { return pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [pw.Container(color: PdfColor.fromHex('CE1126'), width: double.infinity, padding: const pw.EdgeInsets.all(12), child: pw.Column(children: [pw.Text('REAL ME TROTRO - GOVERNMENT EDITION', style: pw.TextStyle(color: PdfColors.white, fontSize: 16, fontWeight: pw.FontWeight.bold)), pw.Text('Safe. Fast. Reliable. | Government Approved', style: const pw.TextStyle(color: PdfColors.white, fontSize: 9))])), pw.SizedBox(height: 16), pw.Text('Ticket ID: ${d['ticket_id']}'), pw.Text('Name: ${d['name']}'), pw.Text('Sold By: ${d['sold_by']}'), pw.Text('Car Plate: ${d['car_plate'] ?? 'N/A'}'), pw.Text('Route: $rn'), pw.Text('Seat: ${d['seat']}'), pw.Text('Fare: GHS ${(d['fare'] as double).toStringAsFixed(2)} PAID', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)), pw.Text('Date: ${d['date']} ${d['time']}'), pw.SizedBox(height: 12), pw.Text('QR: $qr', style: const pw.TextStyle(fontSize: 8)),]); })); final dir = await getApplicationDocumentsDirectory(); final fn = path.join(dir.path, "ticket_${d['ticket_id']}.pdf"); final file = File(fn); await file.writeAsBytes(await pdf.save()); return fn;
   } catch (_) { final dir = await getApplicationDocumentsDirectory(); final fn = path.join(dir.path, "ticket_${d['ticket_id']}.txt"); await File(fn).writeAsString("REAL ME TROTRO\n$d\n"); return fn; }
 }
-Future<Map<String, dynamic>> saveSale(String name, String fs, String ts, double fare, String seat) async { final now = DateTime.now(); final today = "${now.year}-${now.month.toString().padLeft(2,'0')}-${now.day.toString().padLeft(2,'0')}"; final tn = "${now.hour.toString().padLeft(2,'0')}:${now.minute.toString().padLeft(2,'0')}:${now.second.toString().padLeft(2,'0')}"; final tid = generateTicketId(); final sale = {"ticket_id": tid, "date": today, "time": tn, "name": name, "from": fs, "to": ts, "fare": fare, "seat": seat, "sold_by": currentUser ?? "Kiosk"}; final db = await AppDB.getDB(); await db.insert('sales', {'ticket_id': tid, 'date': today, 'time': tn, 'name': name, 'from_s': fs, 'to_s': ts, 'fare': fare, 'seat': seat, 'sold_by': sale['sold_by']}); try { await generatePdfTicket(sale); } catch (_) {} return sale; }
+Future<Map<String, dynamic>> saveSale(String name, String fs, String ts, double fare, String seat, String carPlate) async { final now = DateTime.now(); final today = "${now.year}-${now.month.toString().padLeft(2,'0')}-${now.day.toString().padLeft(2,'0')}"; final tn = "${now.hour.toString().padLeft(2,'0')}:${now.minute.toString().padLeft(2,'0')}:${now.second.toString().padLeft(2,'0')}"; final tid = generateTicketId(); final sale = {"ticket_id": tid, "date": today, "time": tn, "name": name, "from": fs, "to": ts, "fare": fare, "seat": seat, "sold_by": currentUser ?? "Kiosk", "car_plate": carPlate}; final db = await AppDB.getDB(); await db.insert('sales', {'ticket_id': tid, 'date': today, 'time': tn, 'name': name, 'from_s': fs, 'to_s': ts, 'fare': fare, 'seat': seat, 'sold_by': sale['sold_by'], 'car_plate': carPlate}); try { await generatePdfTicket(sale); } catch (_) {} return sale; }
 Future<String> showSalesReport() async { final now = DateTime.now(); final today = "${now.year}-${now.month.toString().padLeft(2,'0')}-${now.day.toString().padLeft(2,'0')}"; final db = await AppDB.getDB(); final rows = await db.query('sales', where: 'date=?', whereArgs: [today]); if (rows.isEmpty) return "No sales today"; final total = rows.length; final money = rows.fold<double>(0, (p, e) => p + (e['fare'] as num).toDouble()); final seatsLeft = (await loadSeats()).length; return "DAILY SALES - $today\nTotal: $total | GHS ${money.toStringAsFixed(2)} | Seats left: $seatsLeft/30"; }
 Future<String> showSeatMap() async { final db = await AppDB.getDB(); final rows = await db.query('seats'); final used = rows.map((e) => e['seat'] as String).toSet(); final buffer = StringBuffer("SEAT MAP\n${"=" * 35}\n"); for (int i = 0; i < 30; i += 4) { final row = [for (int j = i + 1; j <= i + 4; j++) "A${j.toString().padLeft(2, '0')}"]; buffer.writeln(row.map((s) => used.contains(s) ? "[XX]" : "[$s]").join(" ")); } buffer.writeln("=" * 35); return buffer.toString(); }
 
@@ -169,7 +204,7 @@ late Map<String, Map<String, double>> routes; late Map<String, Map<String, dynam
 
 Future<void> main() async { 
   WidgetsFlutterBinding.ensureInitialized(); 
-  try { await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform); isFirebaseReady = true; } catch (e) { isFirebaseReady = false; }
+  try { await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform); isFirebaseReady = true; await FareNotificationService.init(); } catch (e) { isFirebaseReady = false; }
   await initDB(); routes = await loadFares(); users = await loadUsers(); runApp(const TrotroApp()); 
 }
 
@@ -182,135 +217,34 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   }
 }
 
-// === PASSENGER SCREEN - FINAL: TAP SUGGESTION TO SHOW PRICE + SLOW 10 SEC CLEAR ===
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
-  String? fromVal;
-  String? toVal;
-  final fromC = TextEditingController();
-  final toC = TextEditingController();
-  String result = "";
-  double? autoFare;
-  String autoRoute = "";
-  int countdown = 10;
-
+  String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = ""; double? autoFare; String autoRoute = ""; int countdown = 10;
+  @override void initState() { super.initState(); if (isFirebaseReady) { FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async { if (snap.docs.isNotEmpty && mounted) { final data = snap.docs.first.data(); final msg = data['message'] ?? 'Fare updated'; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("🔔 $msg", style: const TextStyle(fontWeight: FontWeight.bold)), backgroundColor: ghGreen, duration: const Duration(seconds: 6))); try { final fSnap = await FirebaseFirestore.instance.collection('fares').get(); final db = await AppDB.getDB(); for (var doc in fSnap.docs) { final d = doc.data(); if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) { await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace); } } routes = await loadFares(); if(mounted) setState((){}); } catch(_){} } }); } }
   List<String> getStationsTitle() => routes.keys.map((e) => titleCase(e)).toList()..sort();
-
   void _showFare() {
-    final fs = resolveStation(fromC.text, fromVal);
-    final ts = resolveStation(toC.text, toVal);
+    final fs = resolveStation(fromC.text, fromVal); final ts = resolveStation(toC.text, toVal);
     if (fs.isEmpty || ts.isEmpty) { setState(() => result = "Select From and To"); return; }
     if (routes.containsKey(fs) && routes[fs]!.containsKey(ts)) {
-      final fare = routes[fs]![ts]!;
-      setState(() {
-        autoFare = fare;
-        autoRoute = "${titleCase(fs)} -> ${titleCase(ts)}";
-        result = "FARE: $autoRoute = GHS ${fare.toStringAsFixed(2)}";
-        countdown = 10;
-      });
-      // Slow clear 10 sec with countdown
-      Future.doWhile(() async {
-        await Future.delayed(const Duration(seconds: 1));
-        if (!mounted || autoFare == null) return false;
-        setState(() => countdown--);
-        if (countdown <= 0) {
-          setState(() {
-            fromC.clear(); toC.clear();
-            fromVal = null; toVal = null;
-            autoFare = null; autoRoute = ""; result = "";
-          });
-          return false;
-        }
-        return true;
-      });
-    } else {
-      setState(() => result = "No route for ${titleCase(fs)} -> ${titleCase(ts)}");
-    }
+      final fare = routes[fs]![ts]!; setState(() { autoFare = fare; autoRoute = "${titleCase(fs)} -> ${titleCase(ts)}"; result = "FARE: $autoRoute = GHS ${fare.toStringAsFixed(2)}"; countdown = 10; });
+      Future.doWhile(() async { await Future.delayed(const Duration(seconds: 1)); if (!mounted || autoFare == null) return false; setState(() => countdown--); if (countdown <= 0) { setState(() { fromC.clear(); toC.clear(); fromVal = null; toVal = null; autoFare = null; autoRoute = ""; result = ""; }); return false; } return true; });
+    } else { setState(() => result = "No route for ${titleCase(fs)} -> ${titleCase(ts)}"); }
   }
-
   Widget _typeField(TextEditingController ctrl, String label, ValueChanged<String> onPicked) {
-    return Autocomplete<String>(
-      optionsBuilder: (TextEditingValue v) {
-        if (v.text.trim().isEmpty) return const Iterable<String>.empty();
-        final q = v.text.toLowerCase();
-        return getStationsTitle().where((s) => s.toLowerCase().contains(q));
-      },
-      fieldViewBuilder: (c, fieldCtrl, focusNode, onSub) {
-        // Sync but DON'T auto show fare
-        if (ctrl.text.isNotEmpty && fieldCtrl.text.isEmpty) fieldCtrl.text = ctrl.text;
-        fieldCtrl.addListener(() {
-          ctrl.text = fieldCtrl.text;
-          // NO AUTO FARE HERE - user must tap suggestion
-        });
-        return TextField(
-          controller: fieldCtrl,
-          focusNode: focusNode,
-          decoration: InputDecoration(
-            labelText: label,
-            hintText: "Type, then TAP suggestion below",
-            border: const OutlineInputBorder(),
-            prefixIcon: const Icon(Icons.edit),
-            suffixIcon: IconButton(
-              icon: const Icon(Icons.clear),
-              onPressed: () {
-                fieldCtrl.clear();
-                ctrl.clear();
-                onPicked("");
-                setState(() { autoFare = null; result = ""; });
-              },
-            ),
-          ),
-        );
-      },
-      onSelected: (sel) {
-        ctrl.text = sel;
-        onPicked(sel);
-        _showFare(); // PRICE ONLY WHEN TAP SUGGESTION
-      },
-      optionsViewBuilder: (c, onSel, opts) {
-        return Align(
-          alignment: Alignment.topLeft,
-          child: Material(
-            elevation: 4,
-            child: SizedBox(
-              width: MediaQuery.of(c).size.width - 32,
-              child: ListView.builder(
-                padding: EdgeInsets.zero,
-                shrinkWrap: true,
-                itemCount: opts.length,
-                itemBuilder: (c, i) {
-                  final o = opts.elementAt(i);
-                  return ListTile(
-                    leading: const Icon(Icons.location_on, color: ghRed),
-                    title: Text(o),
-                    subtitle: const Text("Tap to show fare"),
-                    onTap: () => onSel(o),
-                  );
-                },
-              ),
-            ),
-          ),
-        );
-      },
+    return Autocomplete<String>(optionsBuilder: (TextEditingValue v) { if (v.text.trim().isEmpty) return const Iterable<String>.empty(); final q = v.text.toLowerCase(); return getStationsTitle().where((s) => s.toLowerCase().contains(q)); },
+      fieldViewBuilder: (c, fieldCtrl, focusNode, onSub) { if (ctrl.text.isNotEmpty && fieldCtrl.text.isEmpty) fieldCtrl.text = ctrl.text; fieldCtrl.addListener(() { ctrl.text = fieldCtrl.text; }); return TextField(controller: fieldCtrl, focusNode: focusNode, decoration: InputDecoration(labelText: label, hintText: "Type, then TAP suggestion below", border: const OutlineInputBorder(), prefixIcon: const Icon(Icons.edit), suffixIcon: IconButton(icon: const Icon(Icons.clear), onPressed: () { fieldCtrl.clear(); ctrl.clear(); onPicked(""); setState(() { autoFare = null; result = ""; }); },),),); },
+      onSelected: (sel) { ctrl.text = sel; onPicked(sel); _showFare(); },
+      optionsViewBuilder: (c, onSel, opts) { return Align(alignment: Alignment.topLeft, child: Material(elevation: 4, child: SizedBox(width: MediaQuery.of(c).size.width - 32, child: ListView.builder(padding: EdgeInsets.zero, shrinkWrap: true, itemCount: opts.length, itemBuilder: (c, i) { final o = opts.elementAt(i); return ListTile(leading: const Icon(Icons.location_on, color: ghRed), title: Text(o), subtitle: const Text("Tap to show fare"), onTap: () => onSel(o),); },),),),); },
     );
   }
-
-  @override
-  Widget build(BuildContext context) {
+  @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
-    return Scaffold(
-      appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: (){ fromC.clear(); toC.clear(); setState((){ fromVal=null; toVal=null; autoFare=null; result=""; }); })]),
-      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
-        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type to see suggestions - TAP suggestion to see fare! Clears after 10 sec.", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)),
-        const SizedBox(height:12),
-        DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); if(v!=null) _showFare(); }),
-        const SizedBox(height:8),
-        _typeField(fromC, "From - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ fromVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); fromVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }),
-        const SizedBox(height:16),
-        DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ toVal=v; toC.text=v??""; }); if(v!=null) _showFare(); }),
-        const SizedBox(height:8),
-        _typeField(toC, "To - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ toVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); toVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }),
-        const SizedBox(height:16),
+    return Scaffold(appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: (){ fromC.clear(); toC.clear(); setState((){ fromVal=null; toVal=null; autoFare=null; result=""; }); })]),
+      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type to see suggestions - TAP suggestion to see fare! Live fare updates!", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)), const SizedBox(height:12),
+        DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); if(v!=null) _showFare(); }), const SizedBox(height:8),
+        _typeField(fromC, "From - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ fromVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); fromVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }), const SizedBox(height:16),
+        DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ toVal=v; toC.text=v??""; }); if(v!=null) _showFare(); }), const SizedBox(height:8),
+        _typeField(toC, "To - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ toVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); toVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }), const SizedBox(height:16),
         SizedBox(width:double.infinity, child: ElevatedButton.icon(onPressed: _showFare, icon: const Icon(Icons.search), label: const Text("CHECK FARE"), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)))),
         const SizedBox(height:16),
         if(autoFare!=null) Container(width:double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen, width:2), borderRadius: BorderRadius.circular(12)), child: Column(children:[Text(autoRoute, style: const TextStyle(fontSize:18, fontWeight: FontWeight.bold)), const SizedBox(height:8), Text("FARE: GHS ${autoFare!.toStringAsFixed(2)}", style: const TextStyle(fontSize:28, fontWeight: FontWeight.bold, color: ghGreen)), const SizedBox(height:8), Text("Auto clearing in $countdown sec...", style: const TextStyle(fontSize:11, color: Colors.grey))])),
@@ -337,11 +271,79 @@ class _LoginScreenState extends State<LoginScreen> { final unC=TextEditingContro
 
 class StationMasterScreen extends StatefulWidget { final String username; const StationMasterScreen({super.key, required this.username}); @override State<StationMasterScreen> createState() => _StationMasterScreenState(); }
 class _StationMasterScreenState extends State<StationMasterScreen> {
-  final nameC=TextEditingController(); final fromC=TextEditingController(); final toC=TextEditingController(); String? fromVal; String? toVal;
+  final nameC=TextEditingController(); final fromC=TextEditingController(); final toC=TextEditingController(); final carPlateC=TextEditingController();
+  String? fromVal; String? toVal;
   final updFromC=TextEditingController(); final updToC=TextEditingController(); final updFareC=TextEditingController(); String? updFromVal; String? updToVal;
   final newFromC=TextEditingController(); final newToC=TextEditingController(); final newFareC=TextEditingController(); String info=""; Map<String, dynamic>? lastSale;
   Future<void> doPrint(Map<String, dynamic> sale) async { try{ final pdfPath=await generatePdfTicket(sale); final bytes=await File(pdfPath).readAsBytes(); await Printing.sharePdf(bytes: bytes, filename: 'ticket_${sale['ticket_id']}.pdf'); } catch(_){ final p=await printSmallPaper(sale); if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("FILE: $p"))); } }
   @override Widget build(BuildContext context){
     final stations=routes.keys.toList();
-    return Scaffold(appBar: AppBar(title: Text("Welcome ${users[widget.username]!['full_name']}")), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [const Text("STATION MASTER - SELL TICKET", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), const SizedBox(height:12), Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.yellow.shade100, border: Border.all(color: ghGold, width:2), borderRadius: BorderRadius.circular(8)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children:[const Text("PASSENGER NAME *", style: TextStyle(fontWeight: FontWeight.bold, color: ghRed)), TextField(controller: nameC, decoration: const InputDecoration(labelText: "Type Name", border: OutlineInputBorder())),])), const SizedBox(height:12), DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); }), TextField(controller: fromC, decoration: const InputDecoration(labelText: "From - Or Type")), DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ toVal=v; toC.text=v??""; }); }), TextField(controller: toC, decoration: const InputDecoration(labelText: "To - Or Type")), ElevatedButton(onPressed: () async { if(nameC.text.trim().isEmpty){ setState(()=>info="Enter passenger name!"); return; } final fs=resolveStation(fromC.text, fromVal); final ts=resolveStation(toC.text, toVal); if(fs.isEmpty||ts.isEmpty){ setState(()=>info="Select From and To!"); return; } if(!routes.containsKey(fs)||!routes[fs]!.containsKey(ts)){ setState(()=>info="No route"); return; } final seats=await loadSeats(); if(seats.isEmpty){ setState(()=>info="Bus FULL!"); return; } final fare=routes[fs]![ts]!; final seat=seats.first; await saveSeat(seat); final sale=await saveSale(nameC.text.trim(), fs, ts, fare, seat); setState((){ lastSale=sale; info="SOLD! ${sale['ticket_id']} | $seat | GHS ${fare.toStringAsFixed(2)}"; nameC.clear(); fromC.clear(); toC.clear(); fromVal=null; toVal=null; }); if(!context.mounted) return; showDialog(context: context, builder: (_)=>AlertDialog(title: const Text("✅ TICKET SOLD!"), content: Text("Ticket: ${sale['ticket_id']}\nSeat: $seat\nFare: GHS ${fare.toStringAsFixed(2)}"), actions: [TextButton(onPressed: () async { Navigator.pop(context); await doPrint(sale); }, child: const Text("PRINT")), TextButton(onPressed: ()=>Navigator.pop(context), child: const Text("OK"))])); }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)), child: const Text("SELL TICKET")), if(lastSale!=null) Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen)), child: Column(children:[Text("LAST: ${lastSale!['ticket_id']} | ${lastSale!['seat']} | GHS ${(lastSale!['fare'] as double).toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)), ElevatedButton(onPressed: ()=>doPrint(lastSale!), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("PRINT THIS TICKET")),])), const Divider(height:32), const Text("UPDATE FARE - STATION MASTER", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed)), const SizedBox(height:8), Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.shade50, border: Border.all(color: Colors.blue, width:2), borderRadius: BorderRadius.circular(8)), child: Column(children:[DropdownButtonFormField<String>(value: updFromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ updFromVal=v; updFromC.text=v??""; }); }), TextField(controller: updFromC, decoration: const InputDecoration(labelText: "From - Or Type")), DropdownButtonFormField<String>(value: updToVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ updToVal=v; updToC.text=v??""; }); }), TextField(controller: updToC, decoration: const InputDecoration(labelText: "To - Or Type")), TextField(controller: updFareC, decoration: const InputDecoration(labelText: "New Fare e.g. 50.0"), keyboardType: TextInputType.number), const SizedBox(height:8), ElevatedButton(onPressed: () async { final fs=resolveStation(updFromC.text, updFromVal); final ts=resolveStation(updToC.text, updToVal); final fare=double.tryParse(updFareC.text.trim()); if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To and Fare!"); return; } routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare; await saveFares(routes); setState(()=>info="✅ Fare Updated! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}"); updFromC.clear(); updToC.clear(); updFareC.clear(); updFromVal=null; updToVal=null; }, style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(12)), child: const Text("UPDATE FARE")),])), const SizedBox(height:12), Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: Colors.orange), borderRadius: BorderRadius.circular(8)), child: Column(children:[const Text("ADD NEW ROUTE", style: TextStyle(fontWeight: FontWeight.bold)), TextField(controller: newFromC, decoration: const InputDecoration(labelText: "New From e.g. Takoradi")), TextField(controller: newToC, decoration: const InputDecoration(labelText: "New To e.g. Accra")), TextField(controller: newFareC, decoration: const InputDecoration(labelText: "Fare"), keyboardType: TextInputType.number), const SizedBox(height:8), ElevatedButton(onPressed: () async { final fs=newFromC.text.toLowerCase().trim(); final ts=newToC.text.toLowerCase().trim(); final fare=double.tryParse(newFareC.text.trim()); if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To, Fare!"); return; } routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare; await saveFares(routes); setState(()=>info="✅ New Route Added! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}"); newFromC.clear(); newToC.clear(); newFareC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("ADD NEW ROUTE")),])), const Divider(height:32), ElevatedButton(onPressed: (){ String s=""; for(var fs in routes.keys){ for(var ts in routes[fs]!.keys){ if(fs.compareTo(ts)<0) s+="${titleCase(fs)} <-> ${titleCase(ts)}: GHS ${routes[fs]![ts]!.toStringAsFixed(2)}\n"; } } setState(()=>info=s); }, child: const Text("View all routes")), ElevatedButton(onPressed: () async { final r=await showSalesReport(); setState(()=>info=r); }, child: const Text("Daily Sales")), ElevatedButton(onPressed: () async { final r=await showSeatMap(); setState(()=>info=r); }, child: const Text("Seat Map")), ElevatedButton(onPressed: () async { final db=await AppDB.getDB(); await db.delete('seats'); setState(()=>info="Reset done"); }, child: const Text("Reset seats")), ElevatedButton(onPressed: (){ currentUser=null; Navigator.pop(context); }, child: const Text("Logout")), const SizedBox(height:12), Text(info, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),]))); }
+    return Scaffold(appBar: AppBar(title: Text("Welcome ${users[widget.username]!['full_name']}")), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Text("STATION MASTER - SELL TICKET", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), const SizedBox(height:12),
+      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.yellow.shade50, border: Border.all(color: ghGold, width:2), borderRadius: BorderRadius.circular(12)), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[
+        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.yellow.shade100, border: Border.all(color: ghGold, width:2), borderRadius: BorderRadius.circular(8)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children:[const Text("PASSENGER NAME *", style: TextStyle(fontWeight: FontWeight.bold, color: ghRed)), TextField(controller: nameC, decoration: const InputDecoration(labelText: "Type Name", border: OutlineInputBorder())),])),
+        const SizedBox(height:12),
+        const Text("CAR NUMBER PLATE *", style: TextStyle(fontWeight: FontWeight.bold, color: ghRed)),
+        TextField(controller: carPlateC, decoration: const InputDecoration(labelText: "e.g. GT 1234-24 or GR 2025", border: OutlineInputBorder(), prefixIcon: Icon(Icons.directions_bus, color: ghRed)), textCapitalization: TextCapitalization.characters),
+        const SizedBox(height:12),
+        DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); }),
+        TextField(controller: fromC, decoration: const InputDecoration(labelText: "From - Or Type")),
+        DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ toVal=v; toC.text=v??""; }); }),
+        TextField(controller: toC, decoration: const InputDecoration(labelText: "To - Or Type")),
+        const SizedBox(height:12),
+        ElevatedButton(onPressed: () async {
+          if(nameC.text.trim().isEmpty){ setState(()=>info="Enter passenger name!"); return; }
+          if(carPlateC.text.trim().isEmpty){ setState(()=>info="Enter Car Number Plate! e.g. GT 1234-24"); return; }
+          final fs=resolveStation(fromC.text, fromVal); final ts=resolveStation(toC.text, toVal);
+          if(fs.isEmpty||ts.isEmpty){ setState(()=>info="Select From and To!"); return; }
+          if(!routes.containsKey(fs)||!routes[fs]!.containsKey(ts)){ setState(()=>info="No route"); return; }
+          final seats=await loadSeats(); if(seats.isEmpty){ setState(()=>info="Bus FULL! Use Reset Bus button below."); return; }
+          final fare=routes[fs]![ts]!; final seat=seats.first; await saveSeat(seat);
+          final sale=await saveSale(nameC.text.trim(), fs, ts, fare, seat, carPlateC.text.trim().toUpperCase());
+          setState((){ lastSale=sale; info="SOLD! ${sale['ticket_id']} | $seat | ${sale['car_plate']} | GHS ${fare.toStringAsFixed(2)}"; nameC.clear(); fromC.clear(); toC.clear(); fromVal=null; toVal=null; });
+          if(!context.mounted) return;
+          showDialog(context: context, builder: (_)=>AlertDialog(title: const Text("✅ TICKET SOLD!"), content: Text("Ticket: ${sale['ticket_id']}\nSeat: $seat\nCar: ${sale['car_plate']}\nFare: GHS ${fare.toStringAsFixed(2)}"), actions: [TextButton(onPressed: () async { Navigator.pop(context); await doPrint(sale); }, child: const Text("PRINT")), TextButton(onPressed: ()=>Navigator.pop(context), child: const Text("OK"))]));
+        }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)), child: const Text("SELL TICKET")),
+        const SizedBox(height:12),
+        Row(children:[
+          Expanded(child: ElevatedButton.icon(onPressed: () async {
+            final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: const Text("Reset Bus?"), content: const Text("This will clear all 30 seats for new bus trip. Continue?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context, true), child: const Text("YES RESET")), TextButton(onPressed: ()=>Navigator.pop(context, false), child: const Text("CANCEL"))]));
+            if(confirm==true){ final db=await AppDB.getDB(); await db.delete('seats'); setState(()=>info="✅ Bus Reset! All 30 seats free. Car: ${carPlateC.text}"); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Bus Reset - 30 seats available"), backgroundColor: ghGreen)); }
+          }, icon: const Icon(Icons.refresh), label: const Text("RESET BUS"), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white))),
+          const SizedBox(width:8),
+          Expanded(child: ElevatedButton.icon(onPressed: (){ carPlateC.clear(); setState(()=>info="Car plate cleared"); }, icon: const Icon(Icons.clear), label: const Text("CLEAR PLATE"), style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black))),
+        ]),
+        if(lastSale!=null) Container(margin: const EdgeInsets.only(top:12), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen)), child: Column(children:[Text("LAST: ${lastSale!['ticket_id']} | ${lastSale!['seat']} | ${lastSale!['car_plate']} | GHS ${(lastSale!['fare'] as double).toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)), ElevatedButton(onPressed: ()=>doPrint(lastSale!), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("PRINT THIS TICKET")),])),
+      ])),
+      const Divider(height:32),
+      const Text("UPDATE FARE - STATION MASTER (Notifies Passengers)", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed)), const SizedBox(height:8),
+      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.shade50, border: Border.all(color: Colors.blue, width:2), borderRadius: BorderRadius.circular(8)), child: Column(children:[
+        DropdownButtonFormField<String>(value: updFromVal, decoration: const InputDecoration(labelText: "From - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ updFromVal=v; updFromC.text=v??""; }); }),
+        TextField(controller: updFromC, decoration: const InputDecoration(labelText: "From - Or Type")),
+        DropdownButtonFormField<String>(value: updToVal, decoration: const InputDecoration(labelText: "To - Select"), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ updToVal=v; updToC.text=v??""; }); }),
+        TextField(controller: updToC, decoration: const InputDecoration(labelText: "To - Or Type")),
+        TextField(controller: updFareC, decoration: const InputDecoration(labelText: "New Fare e.g. 50.0"), keyboardType: TextInputType.number),
+        const SizedBox(height:8),
+        ElevatedButton(onPressed: () async {
+          final fs=resolveStation(updFromC.text, updFromVal); final ts=resolveStation(updToC.text, updToVal); final fare=double.tryParse(updFareC.text.trim());
+          if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To and Fare!"); return; }
+          routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare;
+          await saveFares(routes);
+          await FareNotificationService.notifyFareChanged(fs, ts, fare);
+          setState(()=>info="✅ Fare Updated & Passengers Notified! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}");
+          updFromC.clear(); updToC.clear(); updFareC.clear(); updFromVal=null; updToVal=null;
+        }, style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(12)), child: const Text("UPDATE FARE & NOTIFY")),
+      ])),
+      const SizedBox(height:12),
+      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: Colors.orange), borderRadius: BorderRadius.circular(8)), child: Column(children:[const Text("ADD NEW ROUTE", style: TextStyle(fontWeight: FontWeight.bold)), TextField(controller: newFromC, decoration: const InputDecoration(labelText: "New From e.g. Takoradi")), TextField(controller: newToC, decoration: const InputDecoration(labelText: "New To e.g. Accra")), TextField(controller: newFareC, decoration: const InputDecoration(labelText: "Fare"), keyboardType: TextInputType.number), const SizedBox(height:8), ElevatedButton(onPressed: () async { final fs=newFromC.text.toLowerCase().trim(); final ts=newToC.text.toLowerCase().trim(); final fare=double.tryParse(newFareC.text.trim()); if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To, Fare!"); return; } routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare; await saveFares(routes); setState(()=>info="✅ New Route Added! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}"); newFromC.clear(); newToC.clear(); newFareC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("ADD NEW ROUTE")),])),
+      const Divider(height:32),
+      ElevatedButton(onPressed: (){ String s=""; for(var fs in routes.keys){ for(var ts in routes[fs]!.keys){ if(fs.compareTo(ts)<0) s+="${titleCase(fs)} <-> ${titleCase(ts)}: GHS ${routes[fs]![ts]!.toStringAsFixed(2)}\n"; } } setState(()=>info=s); }, child: const Text("View all routes")),
+      ElevatedButton(onPressed: () async { final r=await showSalesReport(); setState(()=>info=r); }, child: const Text("Daily Sales")),
+      ElevatedButton(onPressed: () async { final r=await showSeatMap(); setState(()=>info=r); }, child: const Text("Seat Map")),
+      ElevatedButton(onPressed: () async { final db=await AppDB.getDB(); await db.delete('seats'); setState(()=>info="Reset done (Old)"); }, child: const Text("Reset seats (Old)")),
+      ElevatedButton(onPressed: (){ currentUser=null; Navigator.pop(context); }, child: const Text("Logout")),
+      const SizedBox(height:12),
+      Text(info, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+    ])));
+  }
 }
