@@ -69,10 +69,25 @@ class FareNotificationService {
       await _fcm.subscribeToTopic("ALL_FARES_UPDATES");
     } catch(e){}
   }
+  // CHANGED: Now shows OUTSIDE app like MoMo/WhatsApp
   static Future<void> _showLocal(String title, String body) async {
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails('fare_updates_channel', 'Fare Updates', channelDescription: 'Real Me Trotro Fare Updates', importance: Importance.max, priority: Priority.high);
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      'fare_updates_channel', 
+      'Fare Updates', 
+      channelDescription: 'Real Me Trotro Fare Updates', 
+      importance: Importance.max, 
+      priority: Priority.high,
+      showWhen: true,
+      playSound: true,
+      enableVibration: true,
+      ticker: 'Fare Update'
+    );
     const NotificationDetails details = NotificationDetails(android: androidDetails);
     await _local.show(DateTime.now().millisecondsSinceEpoch % 100000, title, body, details);
+  }
+  // NEW PUBLIC METHOD for outside app - can be called from anywhere
+  static Future<void> showOutside(String title, String body) async {
+    await _showLocal(title, body);
   }
   static Future<void> saveFareOnly(String from, String to, double fare) async {
     if (!isFirebaseReady) return;
@@ -81,17 +96,23 @@ class FareNotificationService {
       await FirebaseFirestore.instance.collection('fares').doc('${to}_${from}').set({'from_s': to, 'to_s': from, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp(), 'updatedBy': currentUser}, SetOptions(merge: true));
     } catch (e) {}
   }
+  // CHANGED: Now shows OUTSIDE notification immediately!
   static Future<void> notifyAllFaresUpdatedByAdmin() async {
-    if (!isFirebaseReady) return;
     try {
-      await FirebaseFirestore.instance.collection('fare_updates').add({
-        'title': 'REAL ME FARE UPDATE',
-        'message': 'Fares are updated pls check before u travel - Real Me Trotro Team',
-        'timestamp': FieldValue.serverTimestamp(),
-        'sentBy': currentUser ?? 'admin',
-        'type': 'GENERAL_UPDATE'
-      });
-    } catch (e) {}
+      if (isFirebaseReady) {
+        await FirebaseFirestore.instance.collection('fare_updates').add({
+          'title': 'REAL ME FARE UPDATE',
+          'message': 'Fares are updated pls check before u travel - Real Me Trotro Team',
+          'timestamp': FieldValue.serverTimestamp(),
+          'sentBy': currentUser ?? 'admin',
+          'type': 'GENERAL_UPDATE'
+        });
+      }
+      // ALWAYS show OUTSIDE app - like WhatsApp
+      await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel - Open app to check!");
+    } catch (e) {
+      await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel");
+    }
   }
 }
 
@@ -231,7 +252,31 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = ""; double? autoFare; String autoRoute = ""; int countdown = 10;
-  @override void initState() { super.initState(); if (isFirebaseReady) { FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async { if (snap.docs.isNotEmpty && mounted) { final data = snap.docs.first.data(); final msg = data['message'] ?? 'Fares are updated pls check before u travel'; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("🔔 $msg", style: const TextStyle(fontWeight: FontWeight.bold)), backgroundColor: ghGreen, duration: const Duration(seconds: 6))); try { final fSnap = await FirebaseFirestore.instance.collection('fares').get(); final db = await AppDB.getDB(); for (var doc in fSnap.docs) { final d = doc.data(); if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) { await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace); } } routes = await loadFares(); if(mounted) setState((){}); } catch(_){} } }); } }
+  @override void initState() { 
+    super.initState(); 
+    if (isFirebaseReady) { 
+      FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async { 
+        if (snap.docs.isNotEmpty && mounted) { 
+          final data = snap.docs.first.data(); 
+          final msg = data['message'] ?? 'Fares are updated pls check before u travel';
+          // CHANGED: Show OUTSIDE app, not inside SnackBar
+          await FareNotificationService.showOutside("REAL ME TROTRO 🇬🇭", msg);
+          try { 
+            final fSnap = await FirebaseFirestore.instance.collection('fares').get(); 
+            final db = await AppDB.getDB(); 
+            for (var doc in fSnap.docs) { 
+              final d = doc.data(); 
+              if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) { 
+                await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace); 
+              } 
+            } 
+            routes = await loadFares(); 
+            if(mounted) setState((){}); 
+          } catch(_){} 
+        } 
+      }); 
+    } 
+  }
   List<String> getStationsTitle() => routes.keys.map((e) => titleCase(e)).toList()..sort();
   void _showFare() {
     final fs = resolveStation(fromC.text, fromVal); final ts = resolveStation(toC.text, toVal);
