@@ -48,26 +48,9 @@ bool verifyPassword(String stored, String provided) {
   } catch (_) { return false; }
 }
 
-// STANDARD: Background handler shows OUTSIDE only when app is closed
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  final FlutterLocalNotificationsPlugin local = FlutterLocalNotificationsPlugin();
-  const AndroidInitializationSettings android = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const InitializationSettings initSettings = InitializationSettings(android: android);
-  await local.initialize(initSettings);
-  
-  const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-    'fare_updates_channel', 'Fare Updates',
-    channelDescription: 'Real Me Trotro Fare Updates',
-    importance: Importance.max, priority: Priority.high,
-  );
-  const NotificationDetails details = NotificationDetails(android: androidDetails);
-  
-  String title = message.notification?.title ?? "REAL ME TROTRO 🇬🇭";
-  String body = message.notification?.body ?? "Fares are updated pls check before u travel";
-  
-  await local.show(9999, title, body, details);
 }
 
 class FareNotificationService {
@@ -75,7 +58,6 @@ class FareNotificationService {
   static final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
   static String? _lastNotifiedId;
   static bool _isNotifying = false;
-  static bool isAppInForeground = true; // TRACK IF APP IS OPEN
 
   static Future<void> init() async {
     try {
@@ -84,17 +66,31 @@ class FareNotificationService {
       const InitializationSettings initSettings = InitializationSettings(android: android);
       await _local.initialize(initSettings);
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-      
-      // STANDARD: When message comes and app is CLOSED, Firebase will show outside automatically
-      // When app is OPEN, we handle inside only
-      FirebaseMessaging.onMessage.listen((RemoteMessage msg) async {
-        // App is OPEN - Don't show outside, handle inside silently
-        if(isAppInForeground) return;
-        // App is in background - show outside
-        await _showLocal(msg.notification?.title ?? "REAL ME TROTRO 🇬🇭", msg.notification?.body ?? "Fares are updated pls check before u travel");
-      });
-      
       await _fcm.subscribeToTopic("ALL_FARES_UPDATES");
+
+      // FIXED: GLOBAL LISTENER - OUTSIDE FIRST! Shows before Passenger Zone
+      if(isFirebaseReady) {
+        FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async {
+          if(snap.docs.isNotEmpty) {
+            final doc = snap.docs.first;
+            if(isDuplicate(doc.id)) return;
+            final data = doc.data();
+            final msg = data['message'] ?? 'Fares are updated pls check before u travel';
+            await _showLocal("REAL ME TROTRO 🇬🇭", msg);
+            try {
+              final fSnap = await FirebaseFirestore.instance.collection('fares').get();
+              final db = await AppDB.getDB();
+              for (var dDoc in fSnap.docs) {
+                final d = dDoc.data();
+                if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
+                  await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
+                }
+              }
+              routes = await loadFares();
+            } catch(_){}
+          }
+        });
+      }
     } catch(e){}
   }
 
@@ -104,14 +100,13 @@ class FareNotificationService {
       channelDescription: 'Real Me Trotro Fare Updates', 
       importance: Importance.max, priority: Priority.high,
       showWhen: true, playSound: true, enableVibration: true,
+      ticker: 'Fare Update'
     );
     const NotificationDetails details = NotificationDetails(android: androidDetails);
     await _local.show(9999, title, body, details);
   }
 
   static Future<void> showOutside(String title, String body) async {
-    // STANDARD: Only show outside if app is NOT in foreground
-    if(isAppInForeground) return;
     await _showLocal(title, body);
   }
 
@@ -135,8 +130,6 @@ class FareNotificationService {
           'sentBy': currentUser ?? 'admin',
           'type': 'GENERAL_UPDATE'
         });
-        // ALSO send FCM to topic so CLOSED apps get outside notification
-        // Note: Firestore listener will handle OPEN apps inside
       } else {
         await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel");
       }
@@ -278,19 +271,7 @@ Future<void> main() async {
   await initDB(); routes = await loadFares(); users = await loadUsers(); runApp(const TrotroApp()); 
 }
 
-class TrotroApp extends StatefulWidget { const TrotroApp({super.key}); @override State<TrotroApp> createState() => _TrotroAppState(); }
-class _TrotroAppState extends State<TrotroApp> with WidgetsBindingObserver {
-  @override void initState() { super.initState(); WidgetsBinding.instance.addObserver(this); }
-  @override void dispose() { WidgetsBinding.instance.removeObserver(this); super.dispose(); }
-  @override void didChangeAppLifecycleState(AppLifecycleState state) {
-    if(state == AppLifecycleState.resumed) {
-      FareNotificationService.isAppInForeground = true;
-    } else if(state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      FareNotificationService.isAppInForeground = false;
-    }
-  }
-  @override Widget build(BuildContext context) { return MaterialApp(title: 'Real Me Trotro', debugShowCheckedModeBanner: false, theme: ThemeData(primaryColor: ghRed, colorScheme: ColorScheme.fromSeed(seedColor: ghRed, primary: ghRed), appBarTheme: const AppBarTheme(backgroundColor: ghRed, foregroundColor: Colors.white)), home: const MainMenuScreen()); }
-}
+class TrotroApp extends StatelessWidget { const TrotroApp({super.key}); @override Widget build(BuildContext context) { return MaterialApp(title: 'Real Me Trotro', debugShowCheckedModeBanner: false, theme: ThemeData(primaryColor: ghRed, colorScheme: ColorScheme.fromSeed(seedColor: ghRed, primary: ghRed), appBarTheme: const AppBarTheme(backgroundColor: ghRed, foregroundColor: Colors.white)), home: const MainMenuScreen()); } }
 
 class MainMenuScreen extends StatefulWidget { const MainMenuScreen({super.key}); @override State<MainMenuScreen> createState() => _MainMenuScreenState(); }
 class _MainMenuScreenState extends State<MainMenuScreen> {
@@ -304,34 +285,21 @@ class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = ""; double? autoFare; String autoRoute = ""; int countdown = 10;
   @override void initState() { 
     super.initState(); 
-    FareNotificationService.isAppInForeground = true;
-    if (isFirebaseReady) { 
-      FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async { 
-        if (snap.docs.isNotEmpty && mounted) { 
-          final doc = snap.docs.first;
-          if(FareNotificationService.isDuplicate(doc.id)) return;
-          // STANDARD: Only sync fares, DON'T show outside when inside Passenger Zone
-          try { 
-            final fSnap = await FirebaseFirestore.instance.collection('fares').get(); 
-            final db = await AppDB.getDB(); 
-            for (var dDoc in fSnap.docs) { 
-              final d = dDoc.data(); 
-              if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) { 
-                await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace); 
-              } 
-            } 
-            routes = await loadFares(); 
-            if(mounted) {
-              setState((){});
-              // Show INSIDE only - Banner
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("✅ Fares updated! New fares loaded inside app"), backgroundColor: ghGreen, duration: Duration(seconds: 3)));
-            }
-          } catch(_){} 
-        } 
-      }); 
-    } 
+    // FIXED: No notification here - Only sync fares! Notification already handled globally OUTSIDE FIRST!
+    if(isFirebaseReady) {
+      FirebaseFirestore.instance.collection('fares').get().then((fSnap) async {
+        final db = await AppDB.getDB();
+        for (var dDoc in fSnap.docs) {
+          final d = dDoc.data();
+          if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
+            await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
+          }
+        }
+        routes = await loadFares();
+        if(mounted) setState((){});
+      });
+    }
   }
-  @override void dispose() { FareNotificationService.isAppInForeground = false; super.dispose(); }
   List<String> getStationsTitle() => routes.keys.map((e) => titleCase(e)).toList()..sort();
   void _showFare() {
     final fs = resolveStation(fromC.text, fromVal); final ts = resolveStation(toC.text, toVal);
@@ -351,7 +319,7 @@ class _PassengerScreenState extends State<PassengerScreen> {
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: (){ fromC.clear(); toC.clear(); setState((){ fromVal=null; toVal=null; autoFare=null; result=""; }); })]),
-      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type to see suggestions - TAP suggestion to see fare! Live fare updates INSIDE when app is open!", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)), const SizedBox(height:12),
+      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type to see suggestions - TAP suggestion to see fare! Live fare updates!", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)), const SizedBox(height:12),
         DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); if(v!=null) _showFare(); }), const SizedBox(height:8),
         _typeField(fromC, "From - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ fromVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); fromVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }), const SizedBox(height:16),
         DropdownButtonFormField<String>(value: toVal, decoration: const InputDecoration(labelText: "To - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ toVal=v; toC.text=v??""; }); if(v!=null) _showFare(); }), const SizedBox(height:8),
@@ -380,24 +348,24 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[
           const Text("🚨 ADMIN FARE NOTIFICATION CONTROL", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed), textAlign: TextAlign.center),
           const SizedBox(height:8),
-          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: ghGold)), child: const Text("Boss Standard:\n1. When app OPEN = fares show INSIDE passenger zone only\n2. When app CLOSED = fares show OUTSIDE notification bar only\n3. Press below to notify ALL", style: TextStyle(fontSize:11))),
+          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: ghGold)), child: const Text("Boss Standard:\n1. Admin press = OUTSIDE notification first!\n2. No need to go Passenger Zone\n3. All phones get it once!", style: TextStyle(fontSize:11))),
           const SizedBox(height:12),
           ElevatedButton.icon(
             onPressed: _isSending ? null : () async {
               setState(()=> _isSending = true);
               final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(
                 title: const Text("Send Fare Update to ALL Users?"),
-                content: const Text("STANDARD:\n- Open apps will see INSIDE\n- Closed apps will see OUTSIDE notification\n\nContinue?"),
+                content: const Text("This will send OUTSIDE notification to ALL phones first!\n\nContinue?"),
                 actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES SEND", style: TextStyle(fontWeight: FontWeight.bold))), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("CANCEL"))]
               ));
               if(confirm==true){
                 await FareNotificationService.notifyAllFaresUpdatedByAdmin();
-                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Standard! Open=Inside, Closed=Outside"), backgroundColor: ghGreen));
+                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent OUTSIDE first - Once and for all!"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
               }
               setState(()=> _isSending = false);
             },
             icon: _isSending ? const SizedBox(width:20,height:20,child:CircularProgressIndicator(color:Colors.white,strokeWidth:2)) : const Icon(Icons.campaign, size:30),
-            label: Text(_isSending ? "SENDING..." : "📢 PRESS TO NOTIFY ALL USERS", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:13)),
+            label: Text(_isSending ? "SENDING..." : "📢 PRESS TO NOTIFY ALL USERS\nFARES UPDATED", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:13)),
             style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(18))
           ),
         ]),
