@@ -56,6 +56,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 class FareNotificationService {
   static final FirebaseMessaging _fcm = FirebaseMessaging.instance;
   static final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
+  static String? _lastNotifiedId;
+  static bool _isNotifying = false;
+
   static Future<void> init() async {
     try {
       await _fcm.requestPermission(alert: true, badge: true, sound: true);
@@ -63,13 +66,10 @@ class FareNotificationService {
       const InitializationSettings initSettings = InitializationSettings(android: android);
       await _local.initialize(initSettings);
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-      FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
-        _showLocal(msg.notification?.title ?? "REAL ME FARE UPDATE", msg.notification?.body ?? "Fares are updated pls check before u travel");
-      });
       await _fcm.subscribeToTopic("ALL_FARES_UPDATES");
     } catch(e){}
   }
-  // CHANGED: Now shows OUTSIDE app like MoMo/WhatsApp
+
   static Future<void> _showLocal(String title, String body) async {
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       'fare_updates_channel', 
@@ -83,12 +83,13 @@ class FareNotificationService {
       ticker: 'Fare Update'
     );
     const NotificationDetails details = NotificationDetails(android: androidDetails);
-    await _local.show(DateTime.now().millisecondsSinceEpoch % 100000, title, body, details);
+    await _local.show(9999, title, body, details);
   }
-  // NEW PUBLIC METHOD for outside app - can be called from anywhere
+
   static Future<void> showOutside(String title, String body) async {
     await _showLocal(title, body);
   }
+
   static Future<void> saveFareOnly(String from, String to, double fare) async {
     if (!isFirebaseReady) return;
     try {
@@ -96,8 +97,10 @@ class FareNotificationService {
       await FirebaseFirestore.instance.collection('fares').doc('${to}_${from}').set({'from_s': to, 'to_s': from, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp(), 'updatedBy': currentUser}, SetOptions(merge: true));
     } catch (e) {}
   }
-  // CHANGED: Now shows OUTSIDE notification immediately!
+
   static Future<void> notifyAllFaresUpdatedByAdmin() async {
+    if(_isNotifying) return;
+    _isNotifying = true;
     try {
       if (isFirebaseReady) {
         await FirebaseFirestore.instance.collection('fare_updates').add({
@@ -107,12 +110,20 @@ class FareNotificationService {
           'sentBy': currentUser ?? 'admin',
           'type': 'GENERAL_UPDATE'
         });
+      } else {
+        await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel - Open app to check!");
       }
-      // ALWAYS show OUTSIDE app - like WhatsApp
-      await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel - Open app to check!");
     } catch (e) {
       await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel");
+    } finally {
+      Future.delayed(Duration(seconds: 3), () => _isNotifying = false);
     }
+  }
+
+  static bool isDuplicate(String docId) {
+    if(_lastNotifiedId == docId) return true;
+    _lastNotifiedId = docId;
+    return false;
   }
 }
 
@@ -257,15 +268,16 @@ class _PassengerScreenState extends State<PassengerScreen> {
     if (isFirebaseReady) { 
       FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async { 
         if (snap.docs.isNotEmpty && mounted) { 
-          final data = snap.docs.first.data(); 
+          final doc = snap.docs.first;
+          if(FareNotificationService.isDuplicate(doc.id)) return;
+          final data = doc.data(); 
           final msg = data['message'] ?? 'Fares are updated pls check before u travel';
-          // CHANGED: Show OUTSIDE app, not inside SnackBar
           await FareNotificationService.showOutside("REAL ME TROTRO 🇬🇭", msg);
           try { 
             final fSnap = await FirebaseFirestore.instance.collection('fares').get(); 
             final db = await AppDB.getDB(); 
-            for (var doc in fSnap.docs) { 
-              final d = doc.data(); 
+            for (var dDoc in fSnap.docs) { 
+              final d = dDoc.data(); 
               if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) { 
                 await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace); 
               } 
@@ -314,6 +326,7 @@ class _PassengerScreenState extends State<PassengerScreen> {
 class CreateAccountScreen extends StatefulWidget { const CreateAccountScreen({super.key}); @override State<CreateAccountScreen> createState() => _CreateAccountScreenState(); }
 class _CreateAccountScreenState extends State<CreateAccountScreen> {
   String? adminUser; final adminU = TextEditingController(); final adminP = TextEditingController(); final newU = TextEditingController(); final fullN = TextEditingController(); final newP = TextEditingController(); final stationC = TextEditingController(); String cloudMsg = "";
+  bool _isSending = false;
   @override Widget build(BuildContext context) {
     if (adminUser == null) { return Scaffold(appBar: AppBar(title: const Text("ADMIN - SECURE ACCESS"), backgroundColor: ghRed), body: Padding(padding: const EdgeInsets.all(16), child: Column(children: [const Icon(Icons.lock, size:60, color:ghRed), const Text("ADMIN ONLY", style:TextStyle(fontSize:18, fontWeight: FontWeight.bold)), TextField(controller: adminU, decoration: const InputDecoration(labelText: "Admin Username")), TextField(controller: adminP, obscureText:true, decoration: const InputDecoration(labelText: "Admin Password")), const SizedBox(height:12), ElevatedButton(onPressed: (){ final un=adminU.text.toLowerCase().trim(); final pw=adminP.text.trim(); if(users.containsKey(un) && verifyPassword(users[un]!['password'], pw) && users[un]!['role']=='admin'){ setState(()=>adminUser=un); } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Auth failed!"))); } }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("VERIFY ADMIN")),]))); }
     return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser ${isFirebaseReady?'Cloud ON':'Offline'}"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: isFirebaseReady?Colors.green.shade50:Colors.red.shade50, border: Border.all(color: isFirebaseReady?ghGreen:ghRed, width:2), borderRadius: BorderRadius.circular(8)), child: Text(isFirebaseReady?"✅ Firebase Connected":"⚠️ Firebase OFF", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:12))), const SizedBox(height:12), const Text("Create New Station Master", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), TextField(controller: newU, decoration: const InputDecoration(labelText: "Username e.g. cape2")), TextField(controller: fullN, decoration: const InputDecoration(labelText: "Full Name")), TextField(controller: newP, decoration: const InputDecoration(labelText: "Password")), TextField(controller: stationC, decoration: const InputDecoration(labelText: "Station")), const SizedBox(height:8), ElevatedButton(onPressed: () async { final nu=newU.text.toLowerCase().trim(); if(nu.contains(" ")||nu.isEmpty||users.containsKey(nu)){ ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid or exists!"))); return; } users[nu]={"password":hashPassword(newP.text),"station":titleCase(stationC.text.trim()),"role":"station_master","full_name":titleCase(fullN.text.trim())}; setState(()=>cloudMsg="Saving..."); await saveUsers(users); final msg=await syncUsersFromCloud(); setState(()=>cloudMsg="✅ $nu created! $msg"); newU.clear(); fullN.clear(); newP.clear(); stationC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("CREATE ACCOUNT")), Text(cloudMsg, style: const TextStyle(fontWeight: FontWeight.bold, color: ghGreen)), const Divider(height:32), const Text("All Accounts", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), const SizedBox(height:8), Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: const [DataColumn(label: Text("Username", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Full Name", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Station", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Delete", style: TextStyle(fontWeight: FontWeight.bold))),], rows: users.entries.map((e){ final isAdmin=e.value['role']=='admin'; return DataRow(cells:[DataCell(Text(e.key)), DataCell(Text(e.value['full_name'])), DataCell(Text(e.value['station'])), DataCell(isAdmin?const Icon(Icons.lock, color: Colors.grey):IconButton(icon: const Icon(Icons.delete, color: ghRed), onPressed: () async { final confirm=await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: Text("Delete ${e.key}?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES")), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("NO"))])); if(confirm==true){ users.remove(e.key); final db=await AppDB.getDB(); await db.delete('users', where:'username=?', whereArgs:[e.key]); if(isFirebaseReady){ try{ await FirebaseFirestore.instance.collection('users').doc(e.key).delete(); }catch(_){} } setState((){}); } })),]); }).toList()))), 
@@ -327,7 +340,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: ghGold)), child: const Text("Boss Strategy:\n1. Fuel ⛽ increases\n2. Tell Station Masters: Update fares within 3 days\n3. After 3 days, check if all updated\n4. Press button below to notify ALL users at once", style: TextStyle(fontSize:11))),
           const SizedBox(height:12),
           ElevatedButton.icon(
-            onPressed: () async {
+            onPressed: _isSending ? null : () async {
+              setState(()=> _isSending = true);
               final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(
                 title: const Text("Send Fare Update to ALL Users?"),
                 content: const Text("This will send to ALL phones:\n\n'Fares are updated pls check before u travel'\n\nContinue?"),
@@ -335,15 +349,16 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
               ));
               if(confirm==true){
                 await FareNotificationService.notifyAllFaresUpdatedByAdmin();
-                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Notification Sent! All users will see: Fares are updated pls check before u travel"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
+                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent ONCE to all devices - Once and for all!"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
               }
+              setState(()=> _isSending = false);
             },
-            icon: const Icon(Icons.campaign, size:30),
-            label: const Text("📢 PRESS TO NOTIFY ALL USERS\nFARES UPDATED", textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, fontSize:13)),
+            icon: _isSending ? const SizedBox(width:20,height:20,child:CircularProgressIndicator(color:Colors.white,strokeWidth:2)) : const Icon(Icons.campaign, size:30),
+            label: Text(_isSending ? "SENDING..." : "📢 PRESS TO NOTIFY ALL USERS\nFARES UPDATED", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:13)),
             style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(18))
           ),
           const SizedBox(height:8),
-          const Text("Only Admin can press this! Station Masters cannot!", style: TextStyle(fontSize:10, color: Colors.grey, fontStyle: FontStyle.italic), textAlign: TextAlign.center),
+          const Text("Only Admin can press this! Station Masters cannot! ONCE AND FOR ALL", style: TextStyle(fontSize:10, color: Colors.grey, fontStyle: FontStyle.italic), textAlign: TextAlign.center),
         ]),
       ),
       const SizedBox(height:16), ElevatedButton(onPressed: ()=>setState(()=>adminUser=null), child: const Text("Logout Admin")),]))); }
