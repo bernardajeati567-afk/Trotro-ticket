@@ -58,6 +58,8 @@ class FareNotificationService {
   static final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
   static String? _lastNotifiedId;
   static bool _isNotifying = false;
+  static bool _isFirstLoad = true; // SENSITIVE FIX
+  static DateTime _appStartTime = DateTime.now();
 
   static Future<void> init() async {
     try {
@@ -68,30 +70,77 @@ class FareNotificationService {
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
       await _fcm.subscribeToTopic("ALL_FARES_UPDATES");
 
-      // FIXED: GLOBAL LISTENER - OUTSIDE FIRST! Shows before Passenger Zone
+      _appStartTime = DateTime.now();
+      _isFirstLoad = true;
+
+      // Load last notified ID from local file to prevent repeat
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        final file = File(path.join(dir.path, 'last_notify.txt'));
+        if(await file.exists()) {
+          _lastNotifiedId = await file.readAsString();
+        }
+      } catch(_){}
+
       if(isFirebaseReady) {
         FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async {
-          if(snap.docs.isNotEmpty) {
-            final doc = snap.docs.first;
-            if(isDuplicate(doc.id)) return;
-            final data = doc.data();
-            final msg = data['message'] ?? 'Fares are updated pls check before u travel';
-            await _showLocal("REAL ME TROTRO 🇬🇭", msg);
-            try {
-              final fSnap = await FirebaseFirestore.instance.collection('fares').get();
-              final db = await AppDB.getDB();
-              for (var dDoc in fSnap.docs) {
-                final d = dDoc.data();
-                if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
-                  await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
-                }
-              }
-              routes = await loadFares();
-            } catch(_){}
+          if(snap.docs.isEmpty) {
+            _isFirstLoad = false;
+            return;
           }
+          final doc = snap.docs.first;
+          final data = doc.data();
+          
+          // SENSITIVE 1: First load after app open - Ignore old notification
+          if(_isFirstLoad) {
+            _isFirstLoad = false;
+            _lastNotifiedId = doc.id;
+            await _saveLastId(doc.id);
+            return; // Don't show on app open
+          }
+
+          // SENSITIVE 2: Duplicate ID check
+          if(_lastNotifiedId == doc.id) return;
+
+          // SENSITIVE 3: Check timestamp is AFTER app start (admin pressed after you opened app)
+          final Timestamp? ts = data['timestamp'] as Timestamp?;
+          if(ts != null) {
+            final docTime = ts.toDate();
+            if(docTime.isBefore(_appStartTime)) {
+              _lastNotifiedId = doc.id;
+              await _saveLastId(doc.id);
+              return; // Old doc, ignore
+            }
+          }
+
+          // NOW admin really pressed - Show OUTSIDE FIRST!
+          final msg = data['message'] ?? 'Fares are updated pls check before u travel';
+          await _showLocal("REAL ME TROTRO 🇬🇭", msg);
+          _lastNotifiedId = doc.id;
+          await _saveLastId(doc.id);
+
+          try {
+            final fSnap = await FirebaseFirestore.instance.collection('fares').get();
+            final db = await AppDB.getDB();
+            for (var dDoc in fSnap.docs) {
+              final d = dDoc.data();
+              if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
+                await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
+              }
+            }
+            routes = await loadFares();
+          } catch(_){}
         });
       }
     } catch(e){}
+  }
+
+  static Future<void> _saveLastId(String id) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File(path.join(dir.path, 'last_notify.txt'));
+      await file.writeAsString(id);
+    } catch(_){}
   }
 
   static Future<void> _showLocal(String title, String body) async {
@@ -142,7 +191,6 @@ class FareNotificationService {
 
   static bool isDuplicate(String docId) {
     if(_lastNotifiedId == docId) return true;
-    _lastNotifiedId = docId;
     return false;
   }
 }
@@ -285,7 +333,6 @@ class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = ""; double? autoFare; String autoRoute = ""; int countdown = 10;
   @override void initState() { 
     super.initState(); 
-    // FIXED: No notification here - Only sync fares! Notification already handled globally OUTSIDE FIRST!
     if(isFirebaseReady) {
       FirebaseFirestore.instance.collection('fares').get().then((fSnap) async {
         final db = await AppDB.getDB();
@@ -348,19 +395,19 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[
           const Text("🚨 ADMIN FARE NOTIFICATION CONTROL", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed), textAlign: TextAlign.center),
           const SizedBox(height:8),
-          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: ghGold)), child: const Text("Boss Standard:\n1. Admin press = OUTSIDE notification first!\n2. No need to go Passenger Zone\n3. All phones get it once!", style: TextStyle(fontSize:11))),
+          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: ghGold)), child: const Text("SENSITIVE MODE:\n1. App opens = NO notification\n2. Admin press button = OUTSIDE notification\n3. Once and for all!", style: TextStyle(fontSize:11))),
           const SizedBox(height:12),
           ElevatedButton.icon(
             onPressed: _isSending ? null : () async {
               setState(()=> _isSending = true);
               final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(
                 title: const Text("Send Fare Update to ALL Users?"),
-                content: const Text("This will send OUTSIDE notification to ALL phones first!\n\nContinue?"),
+                content: const Text("SENSITIVE: This will send OUTSIDE notification to ALL phones!\n\nContinue?"),
                 actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES SEND", style: TextStyle(fontWeight: FontWeight.bold))), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("CANCEL"))]
               ));
               if(confirm==true){
                 await FareNotificationService.notifyAllFaresUpdatedByAdmin();
-                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent OUTSIDE first - Once and for all!"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
+                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent OUTSIDE - Sensitive! Once and for all!"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
               }
               setState(()=> _isSending = false);
             },
@@ -447,7 +494,7 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         }, style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(12)), child: const Text("SAVE FARE (Admin will notify)")),
       ])),
       const SizedBox(height:12),
-      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: Colors.orange), borderRadius: BorderRadius.circular(8)), child: Column(children:[const Text("ADD NEW ROUTE", style: TextStyle(fontWeight: FontWeight.bold)), TextField(controller: newFromC, decoration: const InputDecoration(labelText: "New From e.g. Takoradi")), TextField(controller: newToC, decoration: const InputDecoration(labelText: "New To e.g. Accra")), TextField(controller: newFareC, decoration: const InputDecoration(labelText: "Fare"), keyboardType: TextInputType.number), const SizedBox(height:8), ElevatedButton(onPressed: () async { final fs=newFromC.text.toLowerCase().trim(); final ts=newToC.text.toLowerCase().trim(); final fare=double.tryParse(newFareC.text.trim()); if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To, Fare!"); return; } routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare; await saveFares(routes); setState(()=>info="✅ New Route Added! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}"); newFromC.clear(); newToC.clear(); newFareC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("ADD NEW ROUTE")),])),
+      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: Colors.orange), borderRadius: BorderRadius.circular(8)), child: Column(children:[const Text("ADD NEW ROUTE", style: TextStyle(fontWeight: FontWeight.bold)), TextField(controller: newFromC, decoration: const InputDecoration(labelText: "New From e.g. Takoradi")), TextField(controller: newToC, decoration: const InputDecoration(labelText: "New To e.g. Accra")), TextField(controller: newFareC, decoration: const InputDecoration(labelText: "Fare"), keyboardType: TextInputType.number), const SizedBox(height:8), ElevatedButton(onPressed: () async { final fs=newFromC.text.toLowerCase().trim(); final ts=newToC.text.toLowerCase().trim(); final fare=double.tryParse(newFareC.text.trim()); if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To, Fare!"); return; } routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare; await saveFares(routes); setState(()=>info="✅ New Route Added! ${ttleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}"); newFromC.clear(); newToC.clear(); newFareC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("ADD NEW ROUTE")),])),
       const Divider(height:32),
       ElevatedButton(onPressed: (){ String s=""; for(var fs in routes.keys){ for(var ts in routes[fs]!.keys){ if(fs.compareTo(ts)<0) s+="${titleCase(fs)} <-> ${titleCase(ts)}: GHS ${routes[fs]![ts]!.toStringAsFixed(2)}\n"; } } setState(()=>info=s); }, child: const Text("View all routes")),
       ElevatedButton(onPressed: () async { final r=await showSalesReport(); setState(()=>info=r); }, child: const Text("Daily Sales")),
