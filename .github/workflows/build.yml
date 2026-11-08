@@ -20,19 +20,36 @@ jobs:
       - run: flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android .
       - run: flutter pub get
       - run: |
-          # --- FINAL COMBO THAT ALL AGREE: Flutter 3.29 + Java 17 + Gradle 8.10 + Android 35 ---
           sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-all.zip|' android/gradle/wrapper/gradle-wrapper.properties || true
-          cat android/gradle/wrapper/gradle-wrapper.properties
-          python3 -c "
+          # --- FINAL FIX: Android 35 + NDK 27 + DESUGARING ---
+          python3 <<'PY'
           import pathlib, re
-          for p in [pathlib.Path('android/app/build.gradle'), pathlib.Path('android/app/build.gradle.kts')]:
-              if p.exists():
-                  t = p.read_text()
-                  t = re.sub(r'compileSdk.*', 'compileSdk = 35', t)
-                  t = re.sub(r'targetSdk.*', 'targetSdk = 35', t)
-                  p.write_text(t)
-                  print('FIXED:', p)
-          "
+          for fname in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
+              p = pathlib.Path(fname)
+              if not p.exists():
+                  continue
+              t = p.read_text()
+              # 1. Force Android 35
+              t = re.sub(r'compileSdk.*', 'compileSdk = 35', t)
+              t = re.sub(r'targetSdk.*', 'targetSdk = 35', t)
+              # 2. Force NDK 27 - plugins want 27.0.12077973
+              if 'ndkVersion' in t:
+                  t = re.sub(r'ndkVersion.*', 'ndkVersion = "27.0.12077973"', t)
+              else:
+                  t = t.replace('compileSdk = 35', 'compileSdk = 35\n    ndkVersion = "27.0.12077973"')
+              # 3. Turn ON Desugaring - THIS IS THE FIX FOR flutter_local_notifications
+              if 'isCoreLibraryDesugaringEnabled' not in t:
+                  t = t.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true')
+              # 4. Add desugar library if not there
+              if 'desugar_jdk_libs' not in t:
+                  if 'dependencies {' in t:
+                      t = t.replace('dependencies {', 'dependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")', 1)
+                  else:
+                      t += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")\n}\n'
+              p.write_text(t)
+              print('FIXED:', fname)
+              print(t[:2000])
+          PY
       - run: dart pub add flutter_launcher_icons
       - run: |
           cat > flutter_launcher_icons.yaml <<'EOF'
@@ -45,22 +62,26 @@ jobs:
       - run: dart run flutter_launcher_icons
       - run: |
           sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-all.zip|' android/gradle/wrapper/gradle-wrapper.properties || true
-          python3 -c "
+          # --- FIX AGAIN AFTER ICONS (icons reset file) ---
+          python3 <<'PY'
           import pathlib, re
-          p = pathlib.Path('android/app/build.gradle')
-          if p.exists():
+          for fname in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
+              p = pathlib.Path(fname)
+              if not p.exists():
+                  continue
               t = p.read_text()
               t = re.sub(r'compileSdk.*', 'compileSdk = 35', t)
               t = re.sub(r'targetSdk.*', 'targetSdk = 35', t)
+              if 'ndkVersion' in t:
+                  t = re.sub(r'ndkVersion.*', 'ndkVersion = "27.0.12077973"', t)
+              if 'isCoreLibraryDesugaringEnabled' not in t:
+                  t = t.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true')
+              if 'desugar_jdk_libs' not in t:
+                  if 'dependencies {' in t:
+                      t = t.replace('dependencies {', 'dependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")', 1)
               p.write_text(t)
-          p2 = pathlib.Path('android/app/build.gradle.kts')
-          if p2.exists():
-              t = p2.read_text()
-              t = re.sub(r'compileSdk.*', 'compileSdk = 35', t)
-              t = re.sub(r'targetSdk.*', 'targetSdk = 35', t)
-              p2.write_text(t)
-          print('FIXED AGAIN')
-          "
+              print('FIXED AGAIN:', fname)
+          PY
       - run: flutter clean
       - run: flutter pub get
       - run: flutter build apk --release
