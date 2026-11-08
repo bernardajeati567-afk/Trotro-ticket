@@ -8,34 +8,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # --- FIX 1: FORCE JAVA 17 - THIS IS THE MAIN FIX ---
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.3'
           channel: 'stable'
-
       - run: flutter pub get
-
-      # --- FIX 2: FORCE GRADLE 8.5 - SO IT MATCHES JAVA 17 ---
       - run: |
           if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
             sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
-            cat android/gradle/wrapper/gradle-wrapper.properties
           fi
-
       - run: flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android .
       - run: flutter pub get
-
-      # --- FIX 3: DO GRADLE FIX AGAIN AFTER flutter create ---
       - run: |
           sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-all.zip|' android/gradle/wrapper/gradle-wrapper.properties || true
-
+          # --- FIX: FORCE ANDROID 35 FOR GOOGLE MAP ---
+          sed -i 's/compileSdk 34/compileSdk 35/g; s/compileSdkVersion 34/compileSdkVersion 35/g; s/compileSdk = 34/compileSdk = 35/g' android/app/build.gradle || true
+          sed -i 's/targetSdk 34/targetSdk 35/g; s/targetSdkVersion 34/targetSdkVersion 35/g; s/targetSdk = 34/targetSdk = 35/g' android/app/build.gradle || true
+          sed -i 's/compileSdk 34/compileSdk 35/g' android/app/build.gradle.kts || true
+          sed -i 's/targetSdk 34/targetSdk 35/g' android/app/build.gradle.kts || true
+          grep -n "compileSdk\|targetSdk" android/app/build.gradle* || true
       - run: dart pub add flutter_launcher_icons
       - run: |
           cat > flutter_launcher_icons.yaml <<'EOF'
