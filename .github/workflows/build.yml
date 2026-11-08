@@ -12,28 +12,29 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+      # --- FIX: Flutter 3.29 ALREADY USES ANDROID 35 - NO PATCH NEEDED ---
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.3'
+          flutter-version: '3.29.2'
           channel: 'stable'
       - run: flutter pub get
-      - run: |
-          if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
-            sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
-          fi
       - run: flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android .
       - run: flutter pub get
       - run: |
           sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-all.zip|' android/gradle/wrapper/gradle-wrapper.properties || true
-          # --- REAL FIX: Flutter uses flutter.compileSdkVersion, not 34 ---
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle
-          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' android/app/build.gradle
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle.kts || true
-          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' android/app/build.gradle.kts || true
-          # Also fix old style if it exists
-          sed -i 's/compileSdkVersion 34/compileSdkVersion 35/g; s/targetSdkVersion 34/targetSdkVersion 35/g' android/app/build.gradle || true
-          echo "--- CHECK ---"
-          grep -n "compileSdk\|targetSdk" android/app/build.gradle* || true
+          # --- BULLETPROOF: Python rewrites ANY compileSdk line to 35 ---
+          python3 -c "
+          import pathlib, re
+          for p in [pathlib.Path('android/app/build.gradle'), pathlib.Path('android/app/build.gradle.kts')]:
+              if p.exists():
+                  t = p.read_text()
+                  t = re.sub(r'compileSdk.*', 'compileSdk = 35', t)
+                  t = re.sub(r'targetSdk.*', 'targetSdk = 35', t)
+                  t = re.sub(r'compileSdkVersion.*', 'compileSdkVersion 35', t)
+                  p.write_text(t)
+                  print('FIXED:', p)
+                  print(p.read_text()[:1000])
+          "
       - run: dart pub add flutter_launcher_icons
       - run: |
           cat > flutter_launcher_icons.yaml <<'EOF'
@@ -44,6 +45,20 @@ jobs:
             min_sdk_android: 21
           EOF
       - run: dart run flutter_launcher_icons
+      # --- FIX AGAIN AFTER ICONS - ICONS RESET THE FILE ---
+      - run: |
+          python3 -c "
+          import pathlib, re
+          p = pathlib.Path('android/app/build.gradle')
+          if p.exists():
+              t = p.read_text()
+              t = re.sub(r'compileSdk.*', 'compileSdk = 35', t)
+              t = re.sub(r'targetSdk.*', 'targetSdk = 35', t)
+              p.write_text(t)
+              print('FIXED AGAIN')
+          "
+      - run: flutter clean
+      - run: flutter pub get
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
