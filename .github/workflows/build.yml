@@ -12,17 +12,17 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      # Flutter 3.35 ALREADY uses Android 35 - no patch needed
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.35.4'
           channel: 'stable'
       - run: flutter pub get
-      - run: flutter pub upgrade printing pdf flutter_local_notifications
+      - run: flutter pub upgrade printing pdf flutter_local_notifications || true
       - run: flutter pub get
       - run: |
-          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-all.zip|' android/gradle/wrapper/gradle-wrapper.properties || true
-          # Force Android 35 + NDK 27 + Desugaring in BOTH gradle files
+          # FIX 1: Correct Gradle link - NO backslash this time
+          sed -i 's|distributionUrl=.*|distributionUrl=https://services.gradle.org/distributions/gradle-8.11.1-all.zip|' android/gradle/wrapper/gradle-wrapper.properties || true
+          cat android/gradle/wrapper/gradle-wrapper.properties
           python3 <<'PY'
           import pathlib, re
           for fname in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
@@ -42,16 +42,21 @@ jobs:
               p.write_text(t)
               print('FIXED:', fname)
           PY
-      - run: dart pub add flutter_launcher_icons
       - run: |
-          cat > flutter_launcher_icons.yaml <<'EOF'
+          # FIX 2: Only run icons IF icon.png exists, else SKIP - don't fail build
+          if [ -f "assets/icon.png" ]; then
+            dart pub add flutter_launcher_icons || true
+            cat > flutter_launcher_icons.yaml <<'EOF'
           flutter_launcher_icons:
             android: true
             ios: false
             image_path: "assets/icon.png"
             min_sdk_android: 21
           EOF
-      - run: dart run flutter_launcher_icons
+            dart run flutter_launcher_icons || true
+          else
+            echo "No assets/icon.png found - skipping icons, building with default icon"
+          fi
       - run: flutter clean
       - run: flutter pub get
       - run: flutter build apk --release
