@@ -13,6 +13,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'firebase_options.dart';
 
 const String dbFile = "trotro.db";
@@ -22,6 +23,18 @@ String? currentUser;
 const Color ghRed = Color(0xFFCE1126);
 const Color ghGold = Color(0xFFFCD116);
 const Color ghGreen = Color(0xFF006B3F);
+
+// --- ONLY NEW PART 1: STATION LOCATIONS FOR PASSENGER MAP ---
+const Map<String, LatLng> stationLocations = {
+  'cape coast': LatLng(5.1053, -1.2466),
+  'kotokuraba': LatLng(5.1053, -1.2466),
+  'swedru': LatLng(5.5340, -0.7000),
+  'accra': LatLng(5.6037, -0.1870),
+  'kumasi': LatLng(6.6885, -1.6244),
+  'tamale': LatLng(9.4075, -0.8533),
+  'elmina': LatLng(5.0833, -1.3500),
+  'takoradi': LatLng(4.8845, -1.7554),
+};
 
 const List<Map<String, String>> defaultAccounts = [
   {'username': 'admin', 'password': 'Ad1My', 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'},
@@ -316,6 +329,21 @@ class _PassengerScreenState extends State<PassengerScreen> {
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: (){ fromC.clear(); toC.clear(); setState((){ fromVal=null; toVal=null; autoFare=null; result=""; }); })]),
+      // --- ONLY NEW PART 2: PASSENGER BOTTOM BUTTON ---
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: 0,
+        selectedItemColor: ghRed,
+        unselectedItemColor: Colors.grey,
+        onTap: (i) {
+          if (i == 1) {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => PassengerMapScreen(fromVal: fromVal, toVal: toVal)));
+          }
+        },
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: "FARE"),
+          BottomNavigationBarItem(icon: Icon(Icons.map), label: "MAP"),
+        ],
+      ),
       body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type to see suggestions - TAP suggestion to see fare! Live fare updates!", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)), const SizedBox(height:12),
         DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); if(v!=null) _showFare(); }), const SizedBox(height:8),
         _typeField(fromC, "From - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ fromVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); fromVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }), const SizedBox(height:16),
@@ -327,6 +355,65 @@ class _PassengerScreenState extends State<PassengerScreen> {
         if(result.isNotEmpty) Padding(padding: const EdgeInsets.only(top:12), child: Text(result, style: const TextStyle(fontSize:16, fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
         if(result.startsWith("FARE:")) Container(width:double.infinity, margin: const EdgeInsets.only(top:12), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.shade50, border: Border.all(color: ghRed, width:2), borderRadius: BorderRadius.circular(8)), child: const Text("⚠️ Don't pay more than this fare!", textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, color: ghRed))),
       ])),
+    );
+  }
+}
+
+// --- ONLY NEW PART 3: PASSENGER MAP SCREEN - NOTHING ELSE CHANGED ---
+class PassengerMapScreen extends StatefulWidget {
+  final String? fromVal; final String? toVal;
+  const PassengerMapScreen({super.key, this.fromVal, this.toVal});
+  @override State<PassengerMapScreen> createState() => _PassengerMapScreenState();
+}
+class _PassengerMapScreenState extends State<PassengerMapScreen> {
+  GoogleMapController? _ctrl;
+  String? _selectedStation;
+  Set<Marker> _markers() {
+    final Set<Marker> m = {};
+    for (var s in routes.keys) {
+      final pos = stationLocations[s.toLowerCase()] ?? stationLocations['cape coast']!;
+      m.add(Marker(
+        markerId: MarkerId(s),
+        position: pos,
+        infoWindow: InfoWindow(title: titleCase(s), snippet: "Tap to see fares from here"),
+        onTap: () => setState(() => _selectedStation = s),
+      ));
+    }
+    return m;
+  }
+  @override Widget build(BuildContext context) {
+    final start = stationLocations[(widget.fromVal ?? 'cape coast').toLowerCase()] ?? stationLocations['cape coast']!;
+    return Scaffold(
+      appBar: AppBar(title: const Text("PASSENGER MAP 🗺️"), backgroundColor: ghGreen),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: 1,
+        selectedItemColor: ghRed,
+        onTap: (i) { if (i == 0) Navigator.pop(context); },
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: "FARE"),
+          BottomNavigationBarItem(icon: Icon(Icons.map), label: "MAP"),
+        ],
+      ),
+      body: Column(children: [
+        Expanded(child: GoogleMap(
+          initialCameraPosition: CameraPosition(target: start, zoom: 8),
+          markers: _markers(),
+          myLocationEnabled: true,
+          myLocationButtonEnabled: true,
+          mapType: MapType.normal,
+          onMapCreated: (c) => _ctrl = c,
+        )),
+        Container(width: double.infinity, padding: const EdgeInsets.all(12), color: Colors.white, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(_selectedStation == null ? "Tap any RED PIN to see fares from that station" : "From ${titleCase(_selectedStation!)}:", style: const TextStyle(fontWeight: FontWeight.bold)),
+          if (_selectedStation != null) ...[
+            const SizedBox(height: 6),
+            for (var dest in (routes[_selectedStation!] ?? {}).keys)
+              Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Text("• ${titleCase(_selectedStation!)} -> ${titleCase(dest)} = GHS ${routes[_selectedStation!]![dest]!.toStringAsFixed(2)}", style: const TextStyle(fontSize: 14))),
+          ],
+          const SizedBox(height: 6),
+          const Text("Blue dot = You are here. Red pins = Stations.", style: TextStyle(fontSize: 11, color: Colors.grey)),
+        ])),
+      ]),
     );
   }
 }
