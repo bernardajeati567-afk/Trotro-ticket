@@ -13,7 +13,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'firebase_options.dart';
 
 const String dbFile = "trotro.db";
@@ -23,18 +22,6 @@ String? currentUser;
 const Color ghRed = Color(0xFFCE1126);
 const Color ghGold = Color(0xFFFCD116);
 const Color ghGreen = Color(0xFF006B3F);
-
-// --- ONLY NEW PART 1: STATION LOCATIONS FOR PASSENGER MAP ---
-const Map<String, LatLng> stationLocations = {
-  'cape coast': LatLng(5.1053, -1.2466),
-  'kotokuraba': LatLng(5.1053, -1.2466),
-  'swedru': LatLng(5.5340, -0.7000),
-  'accra': LatLng(5.6037, -0.1870),
-  'kumasi': LatLng(6.6885, -1.6244),
-  'tamale': LatLng(9.4075, -0.8533),
-  'elmina': LatLng(5.0833, -1.3500),
-  'takoradi': LatLng(4.8845, -1.7554),
-};
 
 const List<Map<String, String>> defaultAccounts = [
   {'username': 'admin', 'password': 'Ad1My', 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'},
@@ -114,8 +101,8 @@ class FareNotificationService {
 
   static Future<void> _showLocal(String title, String body) async {
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'fare_updates_channel', 'Fare Updates', 
-      channelDescription: 'Real Me Trotro Fare Updates', 
+      'fare_updates_channel', 'Fare Updates',
+      channelDescription: 'Real Me Trotro Fare Updates',
       importance: Importance.max, priority: Priority.high,
       showWhen: true, playSound: true, enableVibration: true,
       ticker: 'Fare Update'
@@ -275,12 +262,34 @@ String suggestStation(String u, Map<String, Map<String, double>> routes, {bool F
   if (best != null) { final found = noSpace[best]!; if (onConfirm == null || onConfirm(found)) return found; } return u.toLowerCase().trim();
 }
 String resolveStation(String typedText, String? dropVal) { if (typedText.trim().isNotEmpty) return suggestStation(typedText, routes); if (dropVal != null) return dropVal; return ""; }
-late Map<String, Map<String, double>> routes; late Map<String, Map<String, dynamic>> users;
 
-Future<void> main() async { 
-  WidgetsFlutterBinding.ensureInitialized(); 
-  try { await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform); isFirebaseReady = true; await FareNotificationService.init(); } catch (e) { isFirebaseReady = false; }
-  await initDB(); routes = await loadFares(); users = await loadUsers(); runApp(const TrotroApp()); 
+// FAST OFFLINE + ONLINE - Default data so app opens instantly even without data
+Map<String, Map<String, double>> routes = {"cape coast": {"swedru": 45.0, "accra": 35.0, "kumasi": 25.0}, "swedru": {"cape coast": 45.0, "accra": 20.0, "kumasi": 30.0}, "accra": {"cape coast": 35.0, "swedru": 20.0, "kumasi": 45.0}, "kumasi": {"cape coast": 25.0, "swedru": 30.0, "accra": 45.0, "tamale": 65.0}, "tamale": {"kumasi": 65.0}};
+Map<String, Map<String, dynamic>> users = {};
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // 1. Open app IMMEDIATELY - no waiting for internet, Firebase, or DB
+  runApp(const TrotroApp());
+  // 2. Load everything in background - offline and online
+  _initInBackground();
+}
+
+Future<void> _initInBackground() async {
+  try {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform).timeout(const Duration(seconds: 5));
+    isFirebaseReady = true;
+    await FareNotificationService.init();
+  } catch (_) {
+    isFirebaseReady = false;
+  }
+  try {
+    await initDB().timeout(const Duration(seconds: 5));
+    routes = await loadFares();
+    users = await loadUsers();
+  } catch (_) {
+    // Keep default routes above - app still works offline
+  }
 }
 
 class TrotroApp extends StatelessWidget { const TrotroApp({super.key}); @override Widget build(BuildContext context) { return MaterialApp(title: 'Real Me Trotro', debugShowCheckedModeBanner: false, theme: ThemeData(primaryColor: ghRed, colorScheme: ColorScheme.fromSeed(seedColor: ghRed, primary: ghRed), appBarTheme: const AppBarTheme(backgroundColor: ghRed, foregroundColor: Colors.white)), home: const MainMenuScreen()); } }
@@ -295,7 +304,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = ""; double? autoFare; String autoRoute = ""; int countdown = 10;
-  @override void initState() { super.initState(); 
+  @override void initState() { super.initState();
     if(isFirebaseReady) {
       FirebaseFirestore.instance.collection('fares').get().then((fSnap) async {
         final db = await AppDB.getDB();
@@ -329,21 +338,6 @@ class _PassengerScreenState extends State<PassengerScreen> {
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
     return Scaffold(appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: (){ fromC.clear(); toC.clear(); setState((){ fromVal=null; toVal=null; autoFare=null; result=""; }); })]),
-      // --- ONLY NEW PART 2: PASSENGER BOTTOM BUTTON ---
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: 0,
-        selectedItemColor: ghRed,
-        unselectedItemColor: Colors.grey,
-        onTap: (i) {
-          if (i == 1) {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => PassengerMapScreen(fromVal: fromVal, toVal: toVal)));
-          }
-        },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: "FARE"),
-          BottomNavigationBarItem(icon: Icon(Icons.map), label: "MAP"),
-        ],
-      ),
       body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type to see suggestions - TAP suggestion to see fare! Live fare updates!", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)), const SizedBox(height:12),
         DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); if(v!=null) _showFare(); }), const SizedBox(height:8),
         _typeField(fromC, "From - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ fromVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); fromVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }), const SizedBox(height:16),
@@ -359,72 +353,13 @@ class _PassengerScreenState extends State<PassengerScreen> {
   }
 }
 
-// --- ONLY NEW PART 3: PASSENGER MAP SCREEN - NOTHING ELSE CHANGED ---
-class PassengerMapScreen extends StatefulWidget {
-  final String? fromVal; final String? toVal;
-  const PassengerMapScreen({super.key, this.fromVal, this.toVal});
-  @override State<PassengerMapScreen> createState() => _PassengerMapScreenState();
-}
-class _PassengerMapScreenState extends State<PassengerMapScreen> {
-  GoogleMapController? _ctrl;
-  String? _selectedStation;
-  Set<Marker> _markers() {
-    final Set<Marker> m = {};
-    for (var s in routes.keys) {
-      final pos = stationLocations[s.toLowerCase()] ?? stationLocations['cape coast']!;
-      m.add(Marker(
-        markerId: MarkerId(s),
-        position: pos,
-        infoWindow: InfoWindow(title: titleCase(s), snippet: "Tap to see fares from here"),
-        onTap: () => setState(() => _selectedStation = s),
-      ));
-    }
-    return m;
-  }
-  @override Widget build(BuildContext context) {
-    final start = stationLocations[(widget.fromVal ?? 'cape coast').toLowerCase()] ?? stationLocations['cape coast']!;
-    return Scaffold(
-      appBar: AppBar(title: const Text("PASSENGER MAP 🗺️"), backgroundColor: ghGreen),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: 1,
-        selectedItemColor: ghRed,
-        onTap: (i) { if (i == 0) Navigator.pop(context); },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: "FARE"),
-          BottomNavigationBarItem(icon: Icon(Icons.map), label: "MAP"),
-        ],
-      ),
-      body: Column(children: [
-        Expanded(child: GoogleMap(
-          initialCameraPosition: CameraPosition(target: start, zoom: 8),
-          markers: _markers(),
-          myLocationEnabled: true,
-          myLocationButtonEnabled: true,
-          mapType: MapType.normal,
-          onMapCreated: (c) => _ctrl = c,
-        )),
-        Container(width: double.infinity, padding: const EdgeInsets.all(12), color: Colors.white, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_selectedStation == null ? "Tap any RED PIN to see fares from that station" : "From ${titleCase(_selectedStation!)}:", style: const TextStyle(fontWeight: FontWeight.bold)),
-          if (_selectedStation != null) ...[
-            const SizedBox(height: 6),
-            for (var dest in (routes[_selectedStation!] ?? {}).keys)
-              Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Text("• ${titleCase(_selectedStation!)} -> ${titleCase(dest)} = GHS ${routes[_selectedStation!]![dest]!.toStringAsFixed(2)}", style: const TextStyle(fontSize: 14))),
-          ],
-          const SizedBox(height: 6),
-          const Text("Blue dot = You are here. Red pins = Stations.", style: TextStyle(fontSize: 11, color: Colors.grey)),
-        ])),
-      ]),
-    );
-  }
-}
-
 class CreateAccountScreen extends StatefulWidget { const CreateAccountScreen({super.key}); @override State<CreateAccountScreen> createState() => _CreateAccountScreenState(); }
 class _CreateAccountScreenState extends State<CreateAccountScreen> {
   String? adminUser; final adminU = TextEditingController(); final adminP = TextEditingController(); final newU = TextEditingController(); final fullN = TextEditingController(); final newP = TextEditingController(); final stationC = TextEditingController(); String cloudMsg = "";
   bool _isSending = false;
   @override Widget build(BuildContext context) {
     if (adminUser == null) { return Scaffold(appBar: AppBar(title: const Text("ADMIN - SECURE ACCESS"), backgroundColor: ghRed), body: Padding(padding: const EdgeInsets.all(16), child: Column(children: [const Icon(Icons.lock, size:60, color:ghRed), const Text("ADMIN ONLY", style:TextStyle(fontSize:18, fontWeight: FontWeight.bold)), TextField(controller: adminU, decoration: const InputDecoration(labelText: "Admin Username")), TextField(controller: adminP, obscureText:true, decoration: const InputDecoration(labelText: "Admin Password")), const SizedBox(height:12), ElevatedButton(onPressed: (){ final un=adminU.text.toLowerCase().trim(); final pw=adminP.text.trim(); if(users.containsKey(un) && verifyPassword(users[un]!['password'], pw) && users[un]!['role']=='admin'){ setState(()=>adminUser=un); } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Auth failed!"))); } }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("VERIFY ADMIN")),]))); }
-    return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser ${isFirebaseReady?'Cloud ON':'Offline'}"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: isFirebaseReady?Colors.green.shade50:Colors.red.shade50, border: Border.all(color: isFirebaseReady?ghGreen:ghRed, width:2), borderRadius: BorderRadius.circular(8)), child: Text(isFirebaseReady?"✅ Firebase Connected":"⚠️ Firebase OFF", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:12))), const SizedBox(height:12), const Text("Create New Station Master", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), TextField(controller: newU, decoration: const InputDecoration(labelText: "Username e.g. cape2")), TextField(controller: fullN, decoration: const InputDecoration(labelText: "Full Name")), TextField(controller: newP, decoration: const InputDecoration(labelText: "Password")), TextField(controller: stationC, decoration: const InputDecoration(labelText: "Station")), const SizedBox(height:8), ElevatedButton(onPressed: () async { final nu=newU.text.toLowerCase().trim(); if(nu.contains(" ")||nu.isEmpty||users.containsKey(nu)){ ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid or exists!"))); return; } users[nu]={"password":hashPassword(newP.text),"station":titleCase(stationC.text.trim()),"role":"station_master","full_name":titleCase(fullN.text.trim())}; setState(()=>cloudMsg="Saving..."); await saveUsers(users); final msg=await syncUsersFromCloud(); setState(()=>cloudMsg="✅ $nu created! $msg"); newU.clear(); fullN.clear(); newP.clear(); stationC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("CREATE ACCOUNT")), Text(cloudMsg, style: const TextStyle(fontWeight: FontWeight.bold, color: ghGreen)), const Divider(height:32), const Text("All Accounts", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), const SizedBox(height:8), Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: const [DataColumn(label: Text("Username", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Full Name", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Station", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Delete", style: TextStyle(fontWeight: FontWeight.bold))),], rows: users.entries.map((e){ final isAdmin=e.value['role']=='admin'; return DataRow(cells:[DataCell(Text(e.key)), DataCell(Text(e.value['full_name'])), DataCell(Text(e.value['station'])), DataCell(isAdmin?const Icon(Icons.lock, color: Colors.grey):IconButton(icon: const Icon(Icons.delete, color: ghRed), onPressed: () async { final confirm=await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: Text("Delete ${e.key}?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES")), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("NO"))])); if(confirm==true){ users.remove(e.key); final db=await AppDB.getDB(); await db.delete('users', where:'username=?', whereArgs:[e.key]); if(isFirebaseReady){ try{ await FirebaseFirestore.instance.collection('users').doc(e.key).delete(); }catch(_){} } setState((){}); } })),]); }).toList()))), 
+    return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser ${isFirebaseReady?'Cloud ON':'Offline'}"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: isFirebaseReady?Colors.green.shade50:Colors.red.shade50, border: Border.all(color: isFirebaseReady?ghGreen:ghRed, width:2), borderRadius: BorderRadius.circular(8)), child: Text(isFirebaseReady?"✅ Firebase Connected":"⚠️ Firebase OFF", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:12))), const SizedBox(height:12), const Text("Create New Station Master", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), TextField(controller: newU, decoration: const InputDecoration(labelText: "Username e.g. cape2")), TextField(controller: fullN, decoration: const InputDecoration(labelText: "Full Name")), TextField(controller: newP, decoration: const InputDecoration(labelText: "Password")), TextField(controller: stationC, decoration: const InputDecoration(labelText: "Station")), const SizedBox(height:8), ElevatedButton(onPressed: () async { final nu=newU.text.toLowerCase().trim(); if(nu.contains(" ")||nu.isEmpty||users.containsKey(nu)){ ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid or exists!"))); return; } users[nu]={"password":hashPassword(newP.text),"station":titleCase(stationC.text.trim()),"role":"station_master","full_name":titleCase(fullN.text.trim())}; setState(()=>cloudMsg="Saving..."); await saveUsers(users); final msg=await syncUsersFromCloud(); setState(()=>cloudMsg="✅ $nu created! $msg"); newU.clear(); fullN.clear(); newP.clear(); stationC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("CREATE ACCOUNT")), Text(cloudMsg, style: const TextStyle(fontWeight: FontWeight.bold, color: ghGreen)), const Divider(height:32), const Text("All Accounts", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), const SizedBox(height:8), Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: const [DataColumn(label: Text("Username", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Full Name", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Station", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Delete", style: TextStyle(fontWeight: FontWeight.bold))),], rows: users.entries.map((e){ final isAdmin=e.value['role']=='admin'; return DataRow(cells:[DataCell(Text(e.key)), DataCell(Text(e.value['full_name'])), DataCell(Text(e.value['station'])), DataCell(isAdmin?const Icon(Icons.lock, color: Colors.grey):IconButton(icon: const Icon(Icons.delete, color: ghRed), onPressed: () async { final confirm=await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: Text("Delete ${e.key}?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES")), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("NO"))])); if(confirm==true){ users.remove(e.key); final db=await AppDB.getDB(); await db.delete('users', where:'username=?', whereArgs:[e.key]); if(isFirebaseReady){ try{ await FirebaseFirestore.instance.collection('users').doc(e.key).delete(); }catch(_){} } setState((){}); } })),]); }).toList()))),
       const Divider(height:32),
       Container(
         padding: const EdgeInsets.all(16),
@@ -510,7 +445,7 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         if(lastSale!=null) Container(margin: const EdgeInsets.only(top:12), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.green.shade50, border: Border.all(color: ghGreen)), child: Column(children:[Text("LAST: ${lastSale!['ticket_id']} | ${lastSale!['seat']} | ${lastSale!['car_plate']} | GHS ${(lastSale!['fare'] as double).toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)), ElevatedButton(onPressed: ()=>doPrint(lastSale!), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("PRINT THIS TICKET")),])),
       ])),
       const Divider(height:32),
-      const Text("UPDATE FARE - STATION MASTER", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed)), 
+      const Text("UPDATE FARE - STATION MASTER", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed)),
       const Text("Fare will be SAVED but Admin will notify users later", style: TextStyle(fontSize:10, color: Colors.grey)),
       const SizedBox(height:8),
       Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.shade50, border: Border.all(color: Colors.blue, width:2), borderRadius: BorderRadius.circular(8)), child: Column(children:[
