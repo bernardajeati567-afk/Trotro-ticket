@@ -25,11 +25,14 @@ jobs:
       - run: flutter pub get
       - run: |
           sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-all.zip|' android/gradle/wrapper/gradle-wrapper.properties || true
-          # --- FIX: FORCE ANDROID 35 FOR GOOGLE MAP ---
-          sed -i 's/compileSdk 34/compileSdk 35/g; s/compileSdkVersion 34/compileSdkVersion 35/g; s/compileSdk = 34/compileSdk = 35/g' android/app/build.gradle || true
-          sed -i 's/targetSdk 34/targetSdk 35/g; s/targetSdkVersion 34/targetSdkVersion 35/g; s/targetSdk = 34/targetSdk = 35/g' android/app/build.gradle || true
-          sed -i 's/compileSdk 34/compileSdk 35/g' android/app/build.gradle.kts || true
-          sed -i 's/targetSdk 34/targetSdk 35/g' android/app/build.gradle.kts || true
+          # --- REAL FIX: Flutter uses flutter.compileSdkVersion, not 34 ---
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle
+          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' android/app/build.gradle
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle.kts || true
+          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' android/app/build.gradle.kts || true
+          # Also fix old style if it exists
+          sed -i 's/compileSdkVersion 34/compileSdkVersion 35/g; s/targetSdkVersion 34/targetSdkVersion 35/g' android/app/build.gradle || true
+          echo "--- CHECK ---"
           grep -n "compileSdk\|targetSdk" android/app/build.gradle* || true
       - run: dart pub add flutter_launcher_icons
       - run: |
