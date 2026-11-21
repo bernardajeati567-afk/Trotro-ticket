@@ -18,10 +18,9 @@ jobs:
       - run: flutter pub get
 
       - run: |
-          # Create android folder if it does not exist in GitHub
-          if [ ! -d "android" ]; then
-            flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android .
-          fi
+          echo "Deleting OLD android folder to fix V1 embedding error"
+          rm -rf android
+          flutter create --project-name trotro_ticket --org com.trotro.ticket --platforms android .
 
       - run: flutter pub get
 
