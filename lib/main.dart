@@ -263,15 +263,12 @@ String suggestStation(String u, Map<String, Map<String, double>> routes, {bool F
 }
 String resolveStation(String typedText, String? dropVal) { if (typedText.trim().isNotEmpty) return suggestStation(typedText, routes); if (dropVal != null) return dropVal; return ""; }
 
-// FAST OFFLINE + ONLINE - Default data so app opens instantly even without data
 Map<String, Map<String, double>> routes = {"cape coast": {"swedru": 45.0, "accra": 35.0, "kumasi": 25.0}, "swedru": {"cape coast": 45.0, "accra": 20.0, "kumasi": 30.0}, "accra": {"cape coast": 35.0, "swedru": 20.0, "kumasi": 45.0}, "kumasi": {"cape coast": 25.0, "swedru": 30.0, "accra": 45.0, "tamale": 65.0}, "tamale": {"kumasi": 65.0}};
 Map<String, Map<String, dynamic>> users = {};
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 1. Open app IMMEDIATELY - no waiting for internet, Firebase, or DB
   runApp(const TrotroApp());
-  // 2. Load everything in background - offline and online
   _initInBackground();
 }
 
@@ -288,7 +285,6 @@ Future<void> _initInBackground() async {
     routes = await loadFares();
     users = await loadUsers();
   } catch (_) {
-    // Keep default routes above - app still works offline
   }
 }
 
@@ -366,20 +362,18 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         decoration: BoxDecoration(color: ghRed.withOpacity(0.08), border: Border.all(color: ghRed, width:3), borderRadius: BorderRadius.circular(12)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[
           const Text("🚨 ADMIN FARE NOTIFICATION CONTROL", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed), textAlign: TextAlign.center),
-          const SizedBox(height:8),
-          Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: ghGold)), child: const Text("SENSITIVE MODE:\n1. App opens = NO notification\n2. Admin press button = OUTSIDE notification\n3. Once and for all!", style: TextStyle(fontSize:11))),
           const SizedBox(height:12),
           ElevatedButton.icon(
             onPressed: _isSending ? null : () async {
               setState(()=> _isSending = true);
               final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(
                 title: const Text("Send Fare Update to ALL Users?"),
-                content: const Text("SENSITIVE: This will send OUTSIDE notification to ALL phones!\n\nContinue?"),
-                actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES SEND", style: TextStyle(fontWeight: FontWeight.bold))), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("CANCEL"))]
+                content: const Text("This will send a notification to ALL users that fares have been updated.\n\nContinue?"),
+                actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES, SEND", style: TextStyle(fontWeight: FontWeight.bold))), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("CANCEL"))]
               ));
               if(confirm==true){
                 await FareNotificationService.notifyAllFaresUpdatedByAdmin();
-                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent OUTSIDE - Sensitive! Once and for all!"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
+                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent - All users notified!"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
               }
               setState(()=> _isSending = false);
             },
