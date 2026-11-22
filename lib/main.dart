@@ -51,6 +51,19 @@ bool verifyPassword(String stored, String provided) {
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  final FlutterLocalNotificationsPlugin local = FlutterLocalNotificationsPlugin();
+  const AndroidInitializationSettings android = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initSettings = InitializationSettings(android: android);
+  await local.initialize(initSettings);
+  const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+    'fare_updates_channel', 'Fare Updates',
+    channelDescription: 'Real Me Trotro Fare Updates',
+    importance: Importance.max, priority: Priority.high,
+    playSound: true, enableVibration: true,
+  );
+  const NotificationDetails details = NotificationDetails(android: androidDetails);
+  String body = message.notification?.body ?? message.data['message'] ?? 'Fares are updated pls check before u travel';
+  await local.show(9999, "REAL ME TROTRO 🇬🇭", body, details);
 }
 
 class FareNotificationService {
@@ -60,6 +73,7 @@ class FareNotificationService {
   static bool _isNotifying = false;
   static bool _isFirstLoad = true;
   static DateTime _appStartTime = DateTime.now();
+  static bool _fcmListenersAdded = false;
 
   static Future<void> init() async {
     try {
@@ -69,34 +83,65 @@ class FareNotificationService {
       await _local.initialize(initSettings);
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
       await _fcm.subscribeToTopic("ALL_FARES_UPDATES");
+      String? token = await _fcm.getToken();
+      print("FCM TOKEN FOR THIS PHONE: $token");
       _appStartTime = DateTime.now();
       _isFirstLoad = true;
+
+      if (!_fcmListenersAdded) {
+        _fcmListenersAdded = true;
+        FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+          String msg = message.notification?.body ?? message.data['message'] ?? 'Fares are updated pls check before u travel';
+          await _showLocal("REAL ME TROTRO 🇬🇭", msg);
+          await _syncFaresFromCloud();
+        });
+        FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
+          String msg = message.notification?.body ?? message.data['message'] ?? 'Fares are updated pls check before u travel';
+          await _showLocal("REAL ME TROTRO 🇬🇭", msg);
+          await _syncFaresFromCloud();
+        });
+        RemoteMessage? initial = await _fcm.getInitialMessage();
+        if (initial != null) {
+          String msg = initial.notification?.body ?? initial.data['message'] ?? 'Fares are updated pls check before u travel';
+          await _showLocal("REAL ME TROTRO 🇬🇭", msg);
+          await _syncFaresFromCloud();
+        }
+      }
+
       if(isFirebaseReady) {
         FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async {
           if(snap.docs.isEmpty) { _isFirstLoad = false; return; }
           final doc = snap.docs.first;
-          if(_isFirstLoad) { _isFirstLoad = false; _lastNotifiedId = doc.id; return; }
           if(_lastNotifiedId == doc.id) return;
           final data = doc.data();
           final Timestamp? ts = data['timestamp'] as Timestamp?;
-          if(ts != null && ts.toDate().isBefore(_appStartTime)) { _lastNotifiedId = doc.id; return; }
+          if(ts != null && ts.toDate().isBefore(_appStartTime)) {
+            if (_isFirstLoad) { _isFirstLoad = false; _lastNotifiedId = doc.id; return; }
+          }
+          _isFirstLoad = false;
           final msg = data['message'] ?? 'Fares are updated pls check before u travel';
           await _showLocal("REAL ME TROTRO 🇬🇭", msg);
           _lastNotifiedId = doc.id;
-          try {
-            final fSnap = await FirebaseFirestore.instance.collection('fares').get();
-            final db = await AppDB.getDB();
-            for (var dDoc in fSnap.docs) {
-              final d = dDoc.data();
-              if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
-                await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
-              }
-            }
-            routes = await loadFares();
-          } catch(_){}
+          await _syncFaresFromCloud();
         });
       }
-    } catch(e){}
+    } catch(e){
+      print("Notification Init Error: $e");
+    }
+  }
+
+  static Future<void> _syncFaresFromCloud() async {
+    try {
+      final fSnap = await FirebaseFirestore.instance.collection('fares').get();
+      final db = await AppDB.getDB();
+      for (var dDoc in fSnap.docs) {
+        final d = dDoc.data();
+        if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
+          await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+      routes = await loadFares();
+    } catch(_){}
   }
 
   static Future<void> _showLocal(String title, String body) async {
@@ -108,7 +153,8 @@ class FareNotificationService {
       ticker: 'Fare Update'
     );
     const NotificationDetails details = NotificationDetails(android: androidDetails);
-    await _local.show(9999, title, body, details);
+    int id = DateTime.now().millisecondsSinceEpoch % 100000;
+    await _local.show(id, title, body, details);
   }
 
   static Future<void> showOutside(String title, String body) async {
@@ -268,18 +314,23 @@ Map<String, Map<String, dynamic>> users = {};
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  try {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    isFirebaseReady = true;
+  } catch (_) {
+    isFirebaseReady = false;
+  }
   runApp(const TrotroApp());
   _initInBackground();
 }
 
 Future<void> _initInBackground() async {
   try {
-    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform).timeout(const Duration(seconds: 5));
-    isFirebaseReady = true;
-    await FareNotificationService.init();
-  } catch (_) {
-    isFirebaseReady = false;
-  }
+    if (isFirebaseReady) {
+      await FareNotificationService.init();
+    }
+  } catch (_) {}
   try {
     await initDB().timeout(const Duration(seconds: 5));
     routes = await loadFares();
