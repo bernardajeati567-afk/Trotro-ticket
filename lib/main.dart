@@ -23,6 +23,10 @@ const Color ghRed = Color(0xFFCE1126);
 const Color ghGold = Color(0xFFFCD116);
 const Color ghGreen = Color(0xFF006B3F);
 
+// NEW: Global notifier so ALL screens refresh when fares change on another phone
+ValueNotifier<int> faresNotifier = ValueNotifier<int>(0);
+bool _faresListenerStarted = false;
+
 const List<Map<String, String>> defaultAccounts = [
   {'username': 'admin', 'password': 'Ad1My', 'station': 'Head Office', 'role': 'admin', 'full_name': 'System Admin'},
 ];
@@ -74,7 +78,6 @@ class FareNotificationService {
   static bool _isFirstLoad = true;
   static DateTime _appStartTime = DateTime.now();
   static bool _fcmListenersAdded = false;
-
   static Future<void> init() async {
     try {
       await _fcm.requestPermission(alert: true, badge: true, sound: true);
@@ -87,7 +90,6 @@ class FareNotificationService {
       print("FCM TOKEN FOR THIS PHONE: $token");
       _appStartTime = DateTime.now();
       _isFirstLoad = true;
-
       if (!_fcmListenersAdded) {
         _fcmListenersAdded = true;
         FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
@@ -107,7 +109,6 @@ class FareNotificationService {
           await _syncFaresFromCloud();
         }
       }
-
       if(isFirebaseReady) {
         FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async {
           if(snap.docs.isEmpty) { _isFirstLoad = false; return; }
@@ -125,11 +126,8 @@ class FareNotificationService {
           await _syncFaresFromCloud();
         });
       }
-    } catch(e){
-      print("Notification Init Error: $e");
-    }
+    } catch(e){ print("Notification Init Error: $e"); }
   }
-
   static Future<void> _syncFaresFromCloud() async {
     try {
       final fSnap = await FirebaseFirestore.instance.collection('fares').get();
@@ -140,27 +138,17 @@ class FareNotificationService {
           await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
         }
       }
-      routes = await loadFares();
+      routes = await loadFaresLocalOnly();
+      faresNotifier.value++;
     } catch(_){}
   }
-
   static Future<void> _showLocal(String title, String body) async {
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'fare_updates_channel', 'Fare Updates',
-      channelDescription: 'Real Me Trotro Fare Updates',
-      importance: Importance.max, priority: Priority.high,
-      showWhen: true, playSound: true, enableVibration: true,
-      ticker: 'Fare Update'
-    );
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails('fare_updates_channel', 'Fare Updates', channelDescription: 'Real Me Trotro Fare Updates', importance: Importance.max, priority: Priority.high, showWhen: true, playSound: true, enableVibration: true, ticker: 'Fare Update');
     const NotificationDetails details = NotificationDetails(android: androidDetails);
     int id = DateTime.now().millisecondsSinceEpoch % 100000;
     await _local.show(id, title, body, details);
   }
-
-  static Future<void> showOutside(String title, String body) async {
-    await _showLocal(title, body);
-  }
-
+  static Future<void> showOutside(String title, String body) async { await _showLocal(title, body); }
   static Future<void> saveFareOnly(String from, String to, double fare) async {
     if (!isFirebaseReady) return;
     try {
@@ -168,27 +156,14 @@ class FareNotificationService {
       await FirebaseFirestore.instance.collection('fares').doc('${to}_${from}').set({'from_s': to, 'to_s': from, 'fare': fare, 'updatedAt': FieldValue.serverTimestamp(), 'updatedBy': currentUser}, SetOptions(merge: true));
     } catch (e) {}
   }
-
   static Future<void> notifyAllFaresUpdatedByAdmin() async {
     if(_isNotifying) return;
     _isNotifying = true;
     try {
       if (isFirebaseReady) {
-        await FirebaseFirestore.instance.collection('fare_updates').add({
-          'title': 'REAL ME FARE UPDATE',
-          'message': 'Fares are updated pls check before u travel - Real Me Trotro Team',
-          'timestamp': FieldValue.serverTimestamp(),
-          'sentBy': currentUser ?? 'admin',
-          'type': 'GENERAL_UPDATE'
-        });
-      } else {
-        await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel");
-      }
-    } catch (e) {
-      await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel");
-    } finally {
-      Future.delayed(Duration(seconds: 3), () => _isNotifying = false);
-    }
+        await FirebaseFirestore.instance.collection('fare_updates').add({'title': 'REAL ME FARE UPDATE','message': 'Fares are updated pls check before u travel - Real Me Trotro Team','timestamp': FieldValue.serverTimestamp(),'sentBy': currentUser ?? 'admin','type': 'GENERAL_UPDATE'});
+      } else { await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel"); }
+    } catch (e) { await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel"); } finally { Future.delayed(Duration(seconds: 3), () => _isNotifying = false); }
   }
 }
 
@@ -223,11 +198,7 @@ Future<String> syncUsersFromCloud() async {
     for (var r in localRows) {
       final uname = r['username'] as String;
       if (uname != 'admin') {
-        try {
-          await FirebaseFirestore.instance.collection('users').doc(uname).set({
-            'username': r['username'],'password': r['password'],'station': r['station'],'role': r['role'],'full_name': r['full_name'],
-          }, SetOptions(merge: true)).timeout(Duration(seconds: 5));
-        } catch (_) {}
+        try { await FirebaseFirestore.instance.collection('users').doc(uname).set({'username': r['username'],'password': r['password'],'station': r['station'],'role': r['role'],'full_name': r['full_name']}, SetOptions(merge: true)).timeout(Duration(seconds: 5)); } catch (_) {}
       }
     }
     final snap = await FirebaseFirestore.instance.collection('users').get().timeout(const Duration(seconds: 6));
@@ -254,13 +225,8 @@ Future<void> ensureDefaultUsers(Database db) async {
 
 Future<void> initDB() async {
   final db = await AppDB.getDB(); await ensureDefaultUsers(db);
-  final dir = await getApplicationDocumentsDirectory(); final f = File(path.join(dir.path, fareFile));
-  if (await f.exists()) {
-    try {
-      final old = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
-      for (var fs in old.keys) { final dests = old[fs] as Map<String, dynamic>; for (var ts in dests.keys) { await db.insert('fares', {'from_s': fs, 'to_s': ts, 'fare': (dests[ts] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace); } }
-    } catch (_) {}
-  } else {
+  final count = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM fares')) ?? 0;
+  if (count == 0) {
     final dr = {"cape coast": {"swedru": 45.0, "accra": 35.0, "kumasi": 25.0}, "swedru": {"cape coast": 45.0, "accra": 20.0, "kumasi": 30.0}, "accra": {"cape coast": 35.0, "swedru": 20.0, "kumasi": 45.0}, "kumasi": {"cape coast": 25.0, "swedru": 30.0, "accra": 45.0, "tamale": 65.0}, "tamale": {"kumasi": 65.0}};
     for (var fs in dr.keys) { for (var ts in dr[fs]!.keys) { await db.insert('fares', {'from_s': fs, 'to_s': ts, 'fare': dr[fs]![ts]}, conflictAlgorithm: ConflictAlgorithm.replace); } }
   }
@@ -273,16 +239,56 @@ Future<void> saveUsers(Map<String, Map<String, dynamic>> users) async {
   final db = await AppDB.getDB(); for (var u in users.keys) { await db.insert('users', {'username': u,'password': users[u]!['password'],'station': users[u]!['station'],'role': users[u]!['role'],'full_name': users[u]!['full_name']}, conflictAlgorithm: ConflictAlgorithm.replace); }
   if (isFirebaseReady) { try { for (var u in users.keys) { if (u != 'admin') { FirebaseFirestore.instance.collection('users').doc(u).set({'username': u,'password': users[u]!['password'],'station': users[u]!['station'],'role': users[u]!['role'],'full_name': users[u]!['full_name']}); } } } catch (_) {} }
 }
+
+// FIXED: loadFares now pulls from Cloud FIRST, then reads local
 Future<Map<String, Map<String, double>>> loadFares() async {
+  if (isFirebaseReady) {
+    try {
+      final fSnap = await FirebaseFirestore.instance.collection('fares').get().timeout(const Duration(seconds: 5));
+      final db = await AppDB.getDB();
+      for (var dDoc in fSnap.docs) {
+        final d = dDoc.data();
+        if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
+          await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+    } catch (_) {}
+  }
+  return loadFaresLocalOnly();
+}
+Future<Map<String, Map<String, double>>> loadFaresLocalOnly() async {
   final db = await AppDB.getDB(); final rows = await db.query('fares'); final Map<String, Map<String, double>> routes = {};
   for (var r in rows) { final fs = r['from_s'] as String; final ts = r['to_s'] as String; routes.putIfAbsent(fs, () => {})[ts] = (r['fare'] as num).toDouble(); }
   if (routes.isEmpty) { return {"cape coast": {"swedru": 45.0, "accra": 35.0, "kumasi": 25.0}, "swedru": {"cape coast": 45.0, "accra": 20.0, "kumasi": 30.0}, "accra": {"cape coast": 35.0, "swedru": 20.0, "kumasi": 45.0}, "kumasi": {"cape coast": 25.0, "swedru": 30.0, "accra": 45.0, "tamale": 65.0}, "tamale": {"kumasi": 65.0}}; }
   return routes;
 }
+// FIXED: Live listener - all phones hear fare changes immediately
+void startFaresListener() {
+  if (!isFirebaseReady || _faresListenerStarted) return;
+  _faresListenerStarted = true;
+  try {
+    FirebaseFirestore.instance.collection('fares').snapshots().listen((snap) async {
+      final db = await AppDB.getDB();
+      bool changed = false;
+      for (var dDoc in snap.docs) {
+        final d = dDoc.data();
+        if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
+          await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
+          changed = true;
+        }
+      }
+      if (changed) {
+        routes = await loadFaresLocalOnly();
+        faresNotifier.value++;
+      }
+    });
+  } catch (_) { _faresListenerStarted = false; }
+}
 Future<void> saveFares(Map<String, Map<String, double>> routes) async {
   final db = await AppDB.getDB(); await db.delete('fares'); for (var fs in routes.keys) { for (var ts in routes[fs]!.keys) { await db.insert('fares', {'from_s': fs, 'to_s': ts, 'fare': routes[fs]![ts]}); } }
   final dir = await getApplicationDocumentsDirectory(); await File(path.join(dir.path, fareFile)).writeAsString(jsonEncode(routes));
   if (isFirebaseReady) { try { for (var fs in routes.keys) { for (var ts in routes[fs]!.keys) { await FirebaseFirestore.instance.collection('fares').doc('${fs}_${ts}').set({'from_s': fs, 'to_s': ts, 'fare': routes[fs]![ts], 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true)); } } } catch(_){} }
+  faresNotifier.value++;
 }
 Future<List<String>> loadSeats() async { final db = await AppDB.getDB(); final rows = await db.query('seats'); final used = rows.map((e) => e['seat'] as String).toSet(); final allSeats = [for (int i = 1; i <= 30; i++) "A${i.toString().padLeft(2, '0')}"]; return allSeats.where((s) => !used.contains(s)).toList(); }
 Future<void> saveSeat(String seat) async { final db = await AppDB.getDB(); await db.insert('seats', {'seat': seat}, conflictAlgorithm: ConflictAlgorithm.ignore); }
@@ -316,28 +322,13 @@ Map<String, Map<String, dynamic>> users = {};
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  try {
-    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-    isFirebaseReady = true;
-  } catch (_) {
-    isFirebaseReady = false;
-  }
+  try { await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform); isFirebaseReady = true; } catch (_) { isFirebaseReady = false; }
   runApp(const TrotroApp());
   _initInBackground();
 }
-
 Future<void> _initInBackground() async {
-  try {
-    if (isFirebaseReady) {
-      await FareNotificationService.init();
-    }
-  } catch (_) {}
-  try {
-    await initDB().timeout(const Duration(seconds: 5));
-    routes = await loadFares();
-    users = await loadUsers();
-  } catch (_) {
-  }
+  try { if (isFirebaseReady) { await FareNotificationService.init(); } } catch (_) {}
+  try { await initDB().timeout(const Duration(seconds: 5)); routes = await loadFares(); users = await loadUsers(); startFaresListener(); } catch (_) {}
 }
 
 class TrotroApp extends StatelessWidget { const TrotroApp({super.key}); @override Widget build(BuildContext context) { return MaterialApp(title: 'Real Me Trotro', debugShowCheckedModeBanner: false, theme: ThemeData(primaryColor: ghRed, colorScheme: ColorScheme.fromSeed(seedColor: ghRed, primary: ghRed), appBarTheme: const AppBarTheme(backgroundColor: ghRed, foregroundColor: Colors.white)), home: const MainMenuScreen()); } }
@@ -352,21 +343,9 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
 class PassengerScreen extends StatefulWidget { const PassengerScreen({super.key}); @override State<PassengerScreen> createState() => _PassengerScreenState(); }
 class _PassengerScreenState extends State<PassengerScreen> {
   String? fromVal; String? toVal; final fromC = TextEditingController(); final toC = TextEditingController(); String result = ""; double? autoFare; String autoRoute = ""; int countdown = 10;
-  @override void initState() { super.initState();
-    if(isFirebaseReady) {
-      FirebaseFirestore.instance.collection('fares').get().then((fSnap) async {
-        final db = await AppDB.getDB();
-        for (var dDoc in fSnap.docs) {
-          final d = dDoc.data();
-          if (d['from_s'] != null && d['to_s'] != null && d['fare'] != null) {
-            await db.insert('fares', {'from_s': d['from_s'], 'to_s': d['to_s'], 'fare': (d['fare'] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
-          }
-        }
-        routes = await loadFares();
-        if(mounted) setState((){});
-      });
-    }
-  }
+  void _onFaresChanged() { if (mounted) setState(() {}); }
+  @override void initState() { super.initState(); faresNotifier.addListener(_onFaresChanged); startFaresListener(); loadFares().then((r) { if (mounted) setState(() { routes = r; }); }); }
+  @override void dispose() { faresNotifier.removeListener(_onFaresChanged); super.dispose(); }
   List<String> getStationsTitle() => routes.keys.map((e) => titleCase(e)).toList()..sort();
   void _showFare() {
     final fs = resolveStation(fromC.text, fromVal); final ts = resolveStation(toC.text, toVal);
@@ -385,7 +364,7 @@ class _PassengerScreenState extends State<PassengerScreen> {
   }
   @override Widget build(BuildContext context) {
     final stations = routes.keys.toList();
-    return Scaffold(appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: (){ fromC.clear(); toC.clear(); setState((){ fromVal=null; toVal=null; autoFare=null; result=""; }); })]),
+    return Scaffold(appBar: AppBar(title: const Text("PASSENGER - CHECK FARE"), backgroundColor: ghRed, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: () async { routes = await loadFares(); setState((){ fromC.clear(); toC.clear(); fromVal=null; toVal=null; autoFare=null; result=""; }); })]),
       body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue)), child: const Text("💡 Type to see suggestions - TAP suggestion to see fare! Live fare updates!", style: TextStyle(fontSize: 11), textAlign: TextAlign.center)), const SizedBox(height:12),
         DropdownButtonFormField<String>(value: fromVal, decoration: const InputDecoration(labelText: "From - Select Drop-down", border: OutlineInputBorder()), items: stations.map((e)=>DropdownMenuItem(value:e, child:Text(titleCase(e)))).toList(), onChanged: (v){ setState((){ fromVal=v; fromC.text=v??""; }); if(v!=null) _showFare(); }), const SizedBox(height:8),
         _typeField(fromC, "From - Or Type + Tap suggestion", (sel){ setState((){ if(sel.isEmpty){ fromVal=null; } else { final f=stations.firstWhere((s)=>titleCase(s).toLowerCase()==sel.toLowerCase(), orElse: ()=>sel.toLowerCase()); fromVal=routes.containsKey(f)?f: (routes.containsKey(sel.toLowerCase())?sel.toLowerCase():null); } }); }), const SizedBox(height:16),
@@ -409,32 +388,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     if (adminUser == null) { return Scaffold(appBar: AppBar(title: const Text("ADMIN - SECURE ACCESS"), backgroundColor: ghRed), body: Padding(padding: const EdgeInsets.all(16), child: Column(children: [const Icon(Icons.lock, size:60, color:ghRed), const Text("ADMIN ONLY", style:TextStyle(fontSize:18, fontWeight: FontWeight.bold)), TextField(controller: adminU, decoration: const InputDecoration(labelText: "Admin Username")), TextField(controller: adminP, obscureText:true, decoration: const InputDecoration(labelText: "Admin Password")), const SizedBox(height:12), ElevatedButton(onPressed: () async { final un=adminU.text.toLowerCase().trim(); final pw=adminP.text.trim(); users = await loadUsers(); if(users.containsKey(un) && verifyPassword(users[un]!['password'], pw) && users[un]!['role']=='admin'){ setState(()=>adminUser=un); } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Auth failed!"))); } }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("VERIFY ADMIN")),]))); }
     return Scaffold(appBar: AppBar(title: Text("ADMIN - $adminUser"), backgroundColor: ghGreen), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [const Text("Create New Station Master", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), TextField(controller: newU, decoration: const InputDecoration(labelText: "Username e.g. cape2")), TextField(controller: fullN, decoration: const InputDecoration(labelText: "Full Name")), TextField(controller: newP, decoration: const InputDecoration(labelText: "Password")), TextField(controller: stationC, decoration: const InputDecoration(labelText: "Station")), const SizedBox(height:8), ElevatedButton(onPressed: () async { final nu=newU.text.toLowerCase().trim(); if(nu.contains(" ")||nu.isEmpty||users.containsKey(nu)){ ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid or exists!"))); return; } users[nu]={"password":hashPassword(newP.text),"station":titleCase(stationC.text.trim()),"role":"station_master","full_name":titleCase(fullN.text.trim())}; setState(()=>cloudMsg="Saving..."); await saveUsers(users); await syncUsersFromCloud(); setState(()=>cloudMsg="✅ $nu created!"); newU.clear(); fullN.clear(); newP.clear(); stationC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white), child: const Text("CREATE ACCOUNT")), Text(cloudMsg, style: const TextStyle(fontWeight: FontWeight.bold, color: ghGreen)), const Divider(height:32), const Text("All Accounts", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16)), const SizedBox(height:8), Container(decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: const [DataColumn(label: Text("Username", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Full Name", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Station", style: TextStyle(fontWeight: FontWeight.bold))), DataColumn(label: Text("Delete", style: TextStyle(fontWeight: FontWeight.bold))),], rows: users.entries.map((e){ final isAdmin=e.value['role']=='admin'; return DataRow(cells:[DataCell(Text(e.key)), DataCell(Text(e.value['full_name'])), DataCell(Text(e.value['station'])), DataCell(isAdmin?const Icon(Icons.lock, color: Colors.grey):IconButton(icon: const Icon(Icons.delete, color: ghRed), onPressed: () async { final confirm=await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: Text("Delete ${e.key}?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES")), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("NO"))])); if(confirm==true){ users.remove(e.key); final db=await AppDB.getDB(); await db.delete('users', where:'username=?', whereArgs:[e.key]); if(isFirebaseReady){ try{ await FirebaseFirestore.instance.collection('users').doc(e.key).delete(); }catch(_){} } setState((){}); } })),]); }).toList()))),
       const Divider(height:32),
-      Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: ghRed.withOpacity(0.08), border: Border.all(color: ghRed, width:3), borderRadius: BorderRadius.circular(12)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[
-          const Text("🚨 ADMIN FARE NOTIFICATION CONTROL", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed), textAlign: TextAlign.center),
-          const SizedBox(height:12),
-          ElevatedButton.icon(
-            onPressed: _isSending ? null : () async {
-              setState(()=> _isSending = true);
-              final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(
-                title: const Text("Send Fare Update to ALL Users?"),
-                content: const Text("This will send a notification to ALL users that fares have been updated.\n\nContinue?"),
-                actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES, SEND", style: TextStyle(fontWeight: FontWeight.bold))), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("CANCEL"))]
-              ));
-              if(confirm==true){
-                await FareNotificationService.notifyAllFaresUpdatedByAdmin();
-                if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent - All users notified!"), backgroundColor: ghGreen, duration: Duration(seconds: 4)));
-              }
-              setState(()=> _isSending = false);
-            },
-            icon: _isSending ? const SizedBox(width:20,height:20,child:CircularProgressIndicator(color:Colors.white,strokeWidth:2)) : const Icon(Icons.campaign, size:30),
-            label: Text(_isSending ? "SENDING..." : "📢 PRESS TO NOTIFY ALL USERS\nFARES UPDATED", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:13)),
-            style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(18))
-          ),
-        ]),
-      ),
+      Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: ghRed.withOpacity(0.08), border: Border.all(color: ghRed, width:3), borderRadius: BorderRadius.circular(12)), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[ const Text("🚨 ADMIN FARE NOTIFICATION CONTROL", style: TextStyle(fontWeight: FontWeight.bold, fontSize:16, color: ghRed), textAlign: TextAlign.center), const SizedBox(height:12), ElevatedButton.icon(onPressed: _isSending ? null : () async { setState(()=> _isSending = true); final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: const Text("Send Fare Update to ALL Users?"), content: const Text("This will send a notification to ALL users that fares have been updated.\n\nContinue?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context,true), child: const Text("YES, SEND", style: TextStyle(fontWeight: FontWeight.bold))), TextButton(onPressed: ()=>Navigator.pop(context,false), child: const Text("CANCEL"))])); if(confirm==true){ await FareNotificationService.notifyAllFaresUpdatedByAdmin(); if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent - All users notified!"), backgroundColor: ghGreen, duration: Duration(seconds: 4))); } setState(()=> _isSending = false); }, icon: _isSending ? const SizedBox(width:20,height:20,child:CircularProgressIndicator(color:Colors.white,strokeWidth:2)) : const Icon(Icons.campaign, size:30), label: Text(_isSending ? "SENDING..." : "📢 PRESS TO NOTIFY ALL USERS\nFARES UPDATED", textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize:13)), style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(18)) ), ]), ),
       const SizedBox(height:16), ElevatedButton(onPressed: ()=>setState(()=>adminUser=null), child: const Text("Logout Admin")),]))); }
 }
 
@@ -450,6 +404,9 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
   String? fromVal; String? toVal;
   final updFromC=TextEditingController(); final updToC=TextEditingController(); final updFareC=TextEditingController(); String? updFromVal; String? updToVal;
   final newFromC=TextEditingController(); final newToC=TextEditingController(); final newFareC=TextEditingController(); String info=""; Map<String, dynamic>? lastSale;
+  void _onFaresChanged() { if (mounted) setState(() {}); }
+  @override void initState() { super.initState(); faresNotifier.addListener(_onFaresChanged); startFaresListener(); loadFares().then((r) { if (mounted) setState(() { routes = r; }); }); }
+  @override void dispose() { faresNotifier.removeListener(_onFaresChanged); super.dispose(); }
   Future<void> doPrint(Map<String, dynamic> sale) async { try{ final pdfPath=await generatePdfTicket(sale); final bytes=await File(pdfPath).readAsBytes(); await Printing.sharePdf(bytes: bytes, filename: 'ticket_${sale['ticket_id']}.pdf'); } catch(_){ final p=await printSmallPaper(sale); if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("FILE: $p"))); } }
   @override Widget build(BuildContext context){
     final stations=routes.keys.toList();
@@ -481,10 +438,7 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)), child: const Text("SELL TICKET")),
         const SizedBox(height:12),
         Row(children:[
-          Expanded(child: ElevatedButton.icon(onPressed: () async {
-            final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: const Text("Reset Bus?"), content: const Text("This will clear all 30 seats for new bus trip. Continue?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context, true), child: const Text("YES RESET")), TextButton(onPressed: ()=>Navigator.pop(context, false), child: const Text("CANCEL"))]));
-            if(confirm==true){ final db=await AppDB.getDB(); await db.delete('seats'); setState(()=>info="✅ Bus Reset! All 30 seats free. Car: ${carPlateC.text}"); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Bus Reset - 30 seats available"), backgroundColor: ghGreen)); }
-          }, icon: const Icon(Icons.refresh), label: const Text("RESET BUS"), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white))),
+          Expanded(child: ElevatedButton.icon(onPressed: () async { final confirm = await showDialog<bool>(context: context, builder: (_)=>AlertDialog(title: const Text("Reset Bus?"), content: const Text("This will clear all 30 seats for new bus trip. Continue?"), actions: [TextButton(onPressed: ()=>Navigator.pop(context, true), child: const Text("YES RESET")), TextButton(onPressed: ()=>Navigator.pop(context, false), child: const Text("CANCEL"))])); if(confirm==true){ final db=await AppDB.getDB(); await db.delete('seats'); setState(()=>info="✅ Bus Reset! All 30 seats free. Car: ${carPlateC.text}"); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Bus Reset - 30 seats available"), backgroundColor: ghGreen)); } }, icon: const Icon(Icons.refresh), label: const Text("RESET BUS"), style: ElevatedButton.styleFrom(backgroundColor: ghRed, foregroundColor: Colors.white))),
           const SizedBox(width:8),
           Expanded(child: ElevatedButton.icon(onPressed: (){ carPlateC.clear(); setState(()=>info="Car plate cleared"); }, icon: const Icon(Icons.clear), label: const Text("CLEAR PLATE"), style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black))),
         ]),
@@ -501,15 +455,7 @@ class _StationMasterScreenState extends State<StationMasterScreen> {
         TextField(controller: updToC, decoration: const InputDecoration(labelText: "To - Or Type")),
         TextField(controller: updFareC, decoration: const InputDecoration(labelText: "New Fare e.g. 50.0"), keyboardType: TextInputType.number),
         const SizedBox(height:8),
-        ElevatedButton(onPressed: () async {
-          final fs=resolveStation(updFromC.text, updFromVal); final ts=resolveStation(updToC.text, updToVal); final fare=double.tryParse(updFareC.text.trim());
-          if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To and Fare!"); return; }
-          routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare;
-          await saveFares(routes);
-          await FareNotificationService.saveFareOnly(fs, ts, fare);
-          setState(()=>info="✅ Fare SAVED: ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)} | Waiting for Admin to notify all users!");
-          updFromC.clear(); updToC.clear(); updFareC.clear(); updFromVal=null; updToVal=null;
-        }, style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(12)), child: const Text("SAVE FARE (Admin will notify)")),
+        ElevatedButton(onPressed: () async { final fs=resolveStation(updFromC.text, updFromVal); final ts=resolveStation(updToC.text, updToVal); final fare=double.tryParse(updFareC.text.trim()); if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To and Fare!"); return; } routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare; await saveFares(routes); await FareNotificationService.saveFareOnly(fs, ts, fare); setState(()=>info="✅ Fare SAVED: ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)} | Waiting for Admin to notify all users!"); updFromC.clear(); updToC.clear(); updFareC.clear(); updFromVal=null; updToVal=null; }, style: ElevatedButton.styleFrom(backgroundColor: ghGold, foregroundColor: Colors.black, padding: const EdgeInsets.all(12)), child: const Text("SAVE FARE (Admin will notify)")),
       ])),
       const SizedBox(height:12),
       Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.shade50, border: Border.all(color: Colors.orange), borderRadius: BorderRadius.circular(8)), child: Column(children:[const Text("ADD NEW ROUTE", style: TextStyle(fontWeight: FontWeight.bold)), TextField(controller: newFromC, decoration: const InputDecoration(labelText: "New From e.g. Takoradi")), TextField(controller: newToC, decoration: const InputDecoration(labelText: "New To e.g. Accra")), TextField(controller: newFareC, decoration: const InputDecoration(labelText: "Fare"), keyboardType: TextInputType.number), const SizedBox(height:8), ElevatedButton(onPressed: () async { final fs=newFromC.text.toLowerCase().trim(); final ts=newToC.text.toLowerCase().trim(); final fare=double.tryParse(newFareC.text.trim()); if(fs.isEmpty||ts.isEmpty||fare==null){ setState(()=>info="Enter From, To, Fare!"); return; } routes.putIfAbsent(fs, () => {})[ts]=fare; routes.putIfAbsent(ts, () => {})[fs]=fare; await saveFares(routes); setState(()=>info="✅ New Route Added! ${titleCase(fs)} <-> ${titleCase(ts)} = GHS ${fare.toStringAsFixed(2)}"); newFromC.clear(); newToC.clear(); newFareC.clear(); setState((){}); }, style: ElevatedButton.styleFrom(backgroundColor: ghGreen, foregroundColor: Colors.white), child: const Text("ADD NEW ROUTE")),])),
