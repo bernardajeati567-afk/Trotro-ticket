@@ -87,17 +87,16 @@ class FareNotificationService {
         if (initial != null) { String msg = initial.notification?.body ?? initial.data['message'] ?? 'Fares are updated pls check before u travel'; await _showLocal("REAL ME TROTRO 🇬🇭", msg); await _syncFaresFromCloud(); }
       }
       if(isFirebaseReady) {
+        // FIXED: No time check - notify on ANY new doc ID
         FirebaseFirestore.instance.collection('fare_updates').orderBy('timestamp', descending: true).limit(1).snapshots().listen((snap) async {
           if(snap.docs.isEmpty) { _isFirstLoad = false; return; }
           final doc = snap.docs.first;
+          if (_isFirstLoad) { _isFirstLoad = false; _lastNotifiedId = doc.id; return; }
           if(_lastNotifiedId == doc.id) return;
+          _lastNotifiedId = doc.id;
           final data = doc.data();
-          final Timestamp? ts = data['timestamp'] as Timestamp?;
-          if(ts != null && ts.toDate().isBefore(_appStartTime)) { if (_isFirstLoad) { _isFirstLoad = false; _lastNotifiedId = doc.id; return; } }
-          _isFirstLoad = false;
           final msg = data['message'] ?? 'Fares are updated pls check before u travel';
           await _showLocal("REAL ME TROTRO 🇬🇭", msg);
-          _lastNotifiedId = doc.id;
           await _syncFaresFromCloud();
         });
       }
@@ -130,8 +129,10 @@ class FareNotificationService {
     if(_isNotifying) return;
     _isNotifying = true;
     try {
-      if (isFirebaseReady) { await FirebaseFirestore.instance.collection('fare_updates').add({'title': 'REAL ME FARE UPDATE','message': 'Fares are updated pls check before u travel - Real Me Trotro Team','timestamp': FieldValue.serverTimestamp(),'sentBy': currentUser ?? 'admin','type': 'GENERAL_UPDATE'}); }
-      else { await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel"); }
+      if (isFirebaseReady) {
+        final now = DateTime.now();
+        await FirebaseFirestore.instance.collection('fare_updates').add({'title': 'REAL ME FARE UPDATE','message': 'Fares are updated pls check before u travel - Real Me Trotro Team (${now.hour}:${now.minute}:${now.second})','timestamp': FieldValue.serverTimestamp(),'sentBy': currentUser ?? 'admin','type': 'GENERAL_UPDATE'});
+      } else { await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel"); }
     } catch (e) { await _showLocal("REAL ME TROTRO 🇬🇭", "Fares are updated pls check before u travel"); } finally { Future.delayed(Duration(seconds: 3), () => _isNotifying = false); }
   }
 }
@@ -211,7 +212,6 @@ Future<void> saveFares(Map<String, Map<String, double>> routes) async {
   if (isFirebaseReady) { try { for (var fs in routes.keys) { for (var ts in routes[fs]!.keys) { await FirebaseFirestore.instance.collection('fares').doc('${fs}_${ts}').set({'from_s': fs, 'to_s': ts, 'fare': routes[fs]![ts], 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true)); } } } catch(_){} }
   faresNotifier.value++;
 }
-// NEW: Delete one route from phone + Cloud + all other phones
 Future<void> deleteRoute(String fs, String ts) async {
   routes[fs]?.remove(ts); routes[ts]?.remove(fs);
   if (routes[fs]?.isEmpty == true) routes.remove(fs);
@@ -222,7 +222,6 @@ Future<void> deleteRoute(String fs, String ts) async {
   final dir = await getApplicationDocumentsDirectory(); await File(path.join(dir.path, fareFile)).writeAsString(jsonEncode(routes));
   faresNotifier.value++;
 }
-// NEW: Export all sales to Excel CSV file
 Future<String> exportSalesToCsv() async {
   final db = await AppDB.getDB();
   final rows = await db.query('sales', orderBy: 'date DESC, time DESC');
